@@ -1,0 +1,41 @@
+"""
+models.py — Pure data classes that carry analysis results between layers.
+No business logic lives here — just typed containers.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class CriterionResult:
+    """Result for a single scoring criterion."""
+
+    name: str            # human-readable name
+    passed: bool         # did the password satisfy this criterion?
+    score: int           # points awarded (0 if not passed)
+    max_score: int       # maximum possible points for this criterion
+    detail: str          # one-line explanation
+    suggestion: str = "" # improvement tip shown only when not passed
+
+
+@dataclass(frozen=True)
+class PasswordAnalysis:
+    """Aggregated analysis result for one password."""
+
+    password: str
+    score: int                               # 0–100
+    strength_label: str                      # e.g. "Strong"
+    strength_color: str                      # rich colour name
+    criteria: list[CriterionResult] = field(default_factory=list)
+    entropy_bits: float = 0.0
+    suggestions: list[str] = field(default_factory=list)
+
+    @property
+    def passed_count(self) -> int:
+        return sum(1 for c in self.criteria if c.passed)
+
+    @property
+    def total_criteria(self) -> int:
+        return len(self.criteria)
