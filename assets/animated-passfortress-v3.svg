@@ -1,0 +1,96 @@
+<svg width="1200" height="300" viewBox="0 0 1200 300" xmlns="http://www.w3.org/2000/svg">
+
+  <defs>
+
+    <!-- Background -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#05070d"></stop>
+      <stop offset="100%" stop-color="#0b1020"></stop>
+    </linearGradient>
+
+
+    <!-- Animated glow gradient -->
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%">
+        <animate attributeName="stop-color" values="#ffffff;#00eaff;#ffffff" dur="4s" repeatCount="indefinite"></animate>
+      </stop>
+
+      <stop offset="100%">
+        <animate attributeName="stop-color" values="#00eaff;#ffffff;#00eaff" dur="4s" repeatCount="indefinite"></animate>
+      </stop>
+    </linearGradient>
+
+
+    <!-- White glow -->
+    <filter id="glowWhite">
+      <feGaussianBlur stdDeviation="4" result="blur"></feGaussianBlur>
+      <feMerge>
+        <feMergeNode in="blur"></feMergeNode>
+        <feMergeNode in="SourceGraphic"></feMergeNode>
+      </feMerge>
+    </filter>
+
+
+    <!-- Cyan glow -->
+    <filter id="glowCyan">
+      <feGaussianBlur stdDeviation="2" result="blur"></feGaussianBlur>
+      <feMerge>
+        <feMergeNode in="blur"></feMergeNode>
+        <feMergeNode in="SourceGraphic"></feMergeNode>
+      </feMerge>
+    </filter>
+
+  </defs>
+
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="url(#bg)"></rect>
+
+
+  <!-- Stroke draw animation -->
+  <text x="50%" y="45%" text-anchor="middle" font-size="82" font-family="monospace" fill="none" stroke="#ffffff" stroke-width="2" stroke-dasharray="1400" stroke-dashoffset="1400" filter="url(#glowWhite)">
+
+    PassFortress
+
+    <animate attributeName="stroke-dashoffset" from="1400" to="0" dur="3s" fill="freeze"></animate>
+
+  </text>
+
+
+  <!-- White fill with animated glow -->
+  <text x="50%" y="45%" text-anchor="middle" font-size="82" font-family="monospace" fill="#ffffff" opacity="0.25" filter="url(#glowWhite)">
+
+    <animate attributeName="opacity" values="0.2;0.7;0.2" dur="2.5s" repeatCount="indefinite"></animate>
+
+    PassFortress
+
+  </text>
+
+
+  <!-- Moving glow overlay -->
+  <rect x="-300" y="0" width="300" height="300" fill="url(#glowGrad)" opacity="0.07">
+
+    <animate attributeName="x" from="-300" to="1400" dur="4s" repeatCount="indefinite"></animate>
+
+  </rect>
+
+
+  <!-- Subtitle -->
+  <text x="50%" y="65%" text-anchor="middle" font-size="22" font-family="monospace" fill="#00eaff" filter="url(#glowCyan)" opacity="0.9">
+
+    Password Strength Analyser • CLI Security Tool • Multi-Dimension Scoring • Production Ready
+
+    <animate attributeName="opacity" values="0.5;1;0.5" dur="3s" repeatCount="indefinite"></animate>
+
+  </text>
+
+
+  <!-- Scan line -->
+  <rect x="-200" y="0" width="200" height="300" fill="#00eaff" opacity="0.06">
+
+    <animate attributeName="x" from="-200" to="1400" dur="3s" repeatCount="indefinite"></animate>
+
+  </rect>
+
+
+</svg>
