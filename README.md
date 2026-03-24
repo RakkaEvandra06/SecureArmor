@@ -32,7 +32,6 @@ SecureArmor/
 │   └── scoring.py       
 ├── tests/
 │   └── test_analyzer.py   
-├── pyproject.toml
 └── README.md
 ```
 
@@ -44,7 +43,7 @@ SecureArmor/
 ```bash
 # 1. Clone or unzip the project
 git clone https://github.com/RakkaEvandra06/SecureArmor.git
-cd passcheck
+cd SecureArmor
 
 # 2. Install dependencies
 pip install click colorama
