@@ -25,27 +25,27 @@ from .models import CriterionResult, PasswordAnalysis
 @dataclass(frozen=True)
 class _CharProfile:
 
-    length:      int
-    has_upper:   bool
-    has_lower:   bool
-    has_digit:   bool
-    has_special: bool
+    length:        int
+    has_upper:     bool
+    has_lower:     bool
+    has_digit:     bool
+    has_special:   bool
     has_non_ascii: bool
-    char_counts: Counter  # case-folded character frequencies
+    char_counts:   Counter  # Counter of pw.lower() characters
 
     @classmethod
     def from_password(cls, pw: str) -> "_CharProfile":
+        """Build a profile from *pw* in a single O(n) pass."""
         chars = set(pw)
         return cls(
-            length      = len(pw),
-            has_upper   = any(c.isupper() for c in chars),
-            has_lower   = any(c.islower() for c in chars),
-            has_digit   = any(c.isdigit() for c in chars),
-            has_special = any(c in SPECIAL_CHARS for c in chars),
+            length        = len(pw),
+            has_upper     = any(c.isupper() for c in chars),
+            has_lower     = any(c.islower() for c in chars),
+            has_digit     = any(c.isdigit() for c in chars),
+            has_special   = any(c in SPECIAL_CHARS for c in chars),
             has_non_ascii = any(c not in string.printable for c in chars),
-            char_counts = Counter(pw.lower()),
+            char_counts   = Counter(pw.lower()),
         )
-
 
 class PasswordAnalyzer:
 
@@ -55,14 +55,16 @@ class PasswordAnalyzer:
 
     def analyze(self, password: str) -> PasswordAnalysis:
 
+        if not password:
+            raise ValueError("Password must not be empty.")
         if len(password) > LENGTH_MAXIMUM:
             raise ValueError(
-                f"Password length {len(password)} exceeds maximum "
+                f"Password length {len(password)} exceeds the maximum "
                 f"allowed length of {LENGTH_MAXIMUM} characters."
             )
 
         profile = _CharProfile.from_password(password)
-
+ 
         criteria: list[CriterionResult] = [
             self._check_length_minimum(profile),
             self._check_length_good(profile),
@@ -81,7 +83,7 @@ class PasswordAnalyzer:
         score = min(100, sum(c.score for c in criteria))
         label, color = self._strength_band(score)
         suggestions = [c.suggestion for c in criteria if not c.passed and c.suggestion]
-
+ 
         return PasswordAnalysis(
             password       = password,
             score          = score,
@@ -97,6 +99,7 @@ class PasswordAnalyzer:
     # ------------------------------------------------------------------
 
     def _check_length_minimum(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if the password meets the bare minimum length."""
         passed = profile.length >= LENGTH_MINIMUM
         w = SCORE_WEIGHTS["length_minimum"]
         return CriterionResult(
@@ -109,6 +112,7 @@ class PasswordAnalyzer:
         )
 
     def _check_length_good(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if the password meets the recommended length."""
         passed = profile.length >= LENGTH_GOOD
         w = SCORE_WEIGHTS["length_good"]
         return CriterionResult(
@@ -121,6 +125,7 @@ class PasswordAnalyzer:
         )
 
     def _check_length_excellent(self, profile: _CharProfile) -> CriterionResult:
+        """Award bonus points for an excellent (very long) password."""
         passed = profile.length >= LENGTH_EXCELLENT
         w = SCORE_WEIGHTS["length_excellent"]
         return CriterionResult(
@@ -133,6 +138,7 @@ class PasswordAnalyzer:
         )
 
     def _check_has_uppercase(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if the password contains at least one uppercase letter."""
         w = SCORE_WEIGHTS["has_uppercase"]
         return CriterionResult(
             name       = "Uppercase letters",
@@ -144,6 +150,7 @@ class PasswordAnalyzer:
         )
 
     def _check_has_lowercase(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if the password contains at least one lowercase letter."""
         w = SCORE_WEIGHTS["has_lowercase"]
         return CriterionResult(
             name       = "Lowercase letters",
@@ -155,6 +162,7 @@ class PasswordAnalyzer:
         )
 
     def _check_has_digit(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if the password contains at least one digit."""
         w = SCORE_WEIGHTS["has_digit"]
         return CriterionResult(
             name       = "Digits",
@@ -166,6 +174,7 @@ class PasswordAnalyzer:
         )
 
     def _check_has_special(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if the password contains at least one special character."""
         w = SCORE_WEIGHTS["has_special"]
         return CriterionResult(
             name       = "Special characters",
@@ -177,6 +186,7 @@ class PasswordAnalyzer:
         )
 
     def _check_char_variety(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if the password uses at least 3 of the 4 character classes."""
         classes = sum([
             profile.has_upper,
             profile.has_lower,
@@ -195,6 +205,7 @@ class PasswordAnalyzer:
         )
 
     def _check_no_common_password(self, pw: str) -> CriterionResult:
+        """Deduct all points if the password (case-insensitive) is in the common list."""
         is_common = pw.lower() in COMMON_PASSWORDS
         w = SCORE_WEIGHTS["no_common_password"]
         return CriterionResult(
@@ -207,6 +218,7 @@ class PasswordAnalyzer:
         )
 
     def _check_no_keyboard_pattern(self, pw: str) -> CriterionResult:
+        """Deduct all points if the password contains a recognisable keyboard walk."""
         pw_lower = pw.lower()
         found: list[str] = [
             pattern
@@ -229,19 +241,10 @@ class PasswordAnalyzer:
         )
 
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
+
         w = SCORE_WEIGHTS["no_repeated_chars"]
-        if profile.length == 0:
-            return CriterionResult(
-                name      = "No excessive repetition",
-                passed    = False,
-                score     = 0,
-                max_score = w,
-                detail    = "Empty password",
-            )
         most_common_char, most_common_count = profile.char_counts.most_common(1)[0]
-        # Use the folded length for a consistent case-insensitive ratio.
-        folded_length = sum(profile.char_counts.values())
-        ratio = most_common_count / folded_length
+        ratio = most_common_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
         return CriterionResult(
             name       = "No excessive repetition",
@@ -256,6 +259,7 @@ class PasswordAnalyzer:
         )
 
     def _check_entropy(self, profile: _CharProfile) -> CriterionResult:
+        """Award bonus points if the estimated entropy meets the threshold."""
         bits = self._calculate_entropy(profile)
         passed = bits >= ENTROPY_GOOD_THRESHOLD
         w = SCORE_WEIGHTS["entropy_bonus"]
@@ -288,7 +292,7 @@ class PasswordAnalyzer:
         if profile.has_special:
             pool += len(SPECIAL_CHARS)
         if profile.has_non_ascii:
-            pool += 32  # conservative non-ASCII bonus
+            pool += 32   # conservative non-ASCII bonus
 
         if pool == 0:
             return 0.0
@@ -297,7 +301,7 @@ class PasswordAnalyzer:
 
     @staticmethod
     def _strength_band(score: int) -> tuple[str, str]:
-        """Map a numeric score to a (label, colour_key) pair."""
+        """Map a numeric *score* (0-100) to a ``(label, colour_key)`` pair."""
         for threshold, label, color in STRENGTH_BANDS:
             if score >= threshold:
                 return label, color
