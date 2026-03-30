@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+__all__ = [
+    "SCORE_WEIGHTS",
+    "LENGTH_MINIMUM",
+    "LENGTH_GOOD",
+    "LENGTH_EXCELLENT",
+    "LENGTH_MAXIMUM",
+    "ENTROPY_GOOD_THRESHOLD",
+    "REPEATED_CHAR_RATIO",
+    "STRENGTH_BANDS",
+    "SPECIAL_CHARS",
+    "KEYBOARD_PATTERNS",
+    "KEYBOARD_PATTERN_MIN_LEN",
+    "COMMON_PASSWORDS",
+]
+
 # ---------------------------------------------------------------------------
 # Scoring weights
 # ---------------------------------------------------------------------------
@@ -21,13 +36,8 @@ SCORE_WEIGHTS: dict[str, int] = {
 assert all(v >= 0 for v in SCORE_WEIGHTS.values()), (
     "All SCORE_WEIGHTS values must be non-negative"
 )
-# Weights intentionally sum to 110; the analyzer caps the final score at 100
-# via min(100, ...) so that a perfect password earns exactly 100 even when
-# not every criterion carries equal weight.  Raise the ceiling here only if
-# you also remove the cap in PasswordAnalyzer.analyze().
-_WEIGHTS_TOTAL = sum(SCORE_WEIGHTS.values())
-assert _WEIGHTS_TOTAL >= 100, (
-    f"SCORE_WEIGHTS sum to {_WEIGHTS_TOTAL}, must be >= 100 "
+assert sum(SCORE_WEIGHTS.values()) >= 100, (
+    f"SCORE_WEIGHTS sum to {sum(SCORE_WEIGHTS.values())}, must be >= 100 "
     "so that a perfect password can reach a score of 100"
 )
 
@@ -37,7 +47,7 @@ assert _WEIGHTS_TOTAL >= 100, (
 LENGTH_MINIMUM:   int = 8
 LENGTH_GOOD:      int = 12
 LENGTH_EXCELLENT: int = 20
-LENGTH_MAXIMUM:   int = 1_000  # guard against pathological inputs
+LENGTH_MAXIMUM:   int = 1_000   # guard against pathological inputs
 
 assert LENGTH_MINIMUM < LENGTH_GOOD < LENGTH_EXCELLENT < LENGTH_MAXIMUM, (
     "Length thresholds must be strictly increasing"
@@ -46,7 +56,7 @@ assert LENGTH_MINIMUM < LENGTH_GOOD < LENGTH_EXCELLENT < LENGTH_MAXIMUM, (
 # ---------------------------------------------------------------------------
 # Entropy (bits)
 # ---------------------------------------------------------------------------
-ENTROPY_GOOD_THRESHOLD: float = 50.0  # qualifies for entropy bonus
+ENTROPY_GOOD_THRESHOLD: float = 50.0   # qualifies for entropy bonus
 
 # ---------------------------------------------------------------------------
 # Repeated characters — flag if any char appears >= this fraction of length
@@ -68,7 +78,7 @@ STRENGTH_BANDS: list[tuple[int, str, str]] = [
     (20, "Weak",        "red"),
     ( 0, "Very Weak",   "bright_red"),
 ]
-
+ 
 assert STRENGTH_BANDS == sorted(STRENGTH_BANDS, key=lambda t: t[0], reverse=True), (
     "STRENGTH_BANDS must be sorted by threshold descending"
 )
@@ -118,3 +128,12 @@ COMMON_PASSWORDS: frozenset[str] = frozenset({
 assert all(entry == entry.lower() for entry in COMMON_PASSWORDS), (
     "All COMMON_PASSWORDS entries must be lower-case"
 )
+
+# Detect overlap between the two lists and fail fast.  The temporary name
+# is deleted immediately so it never leaks into the module namespace.
+_overlap = frozenset(KEYBOARD_PATTERNS) & COMMON_PASSWORDS
+assert not _overlap, (
+    f"Entries in both KEYBOARD_PATTERNS and COMMON_PASSWORDS: {sorted(_overlap)}. "
+    "This causes a hidden double-penalty. Remove duplicates from one list."
+)
+del _overlap
