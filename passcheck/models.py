@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 @dataclass(frozen=True)
 class CriterionResult:
     """Immutable result for a single scoring criterion."""
-
     name:       str   # human-readable name
     passed:     bool  # did the password satisfy this criterion?
     score:      int   # points awarded (0 if not passed)
@@ -18,7 +16,6 @@ class CriterionResult:
 @dataclass(frozen=True)
 class PasswordAnalysis:
     """Immutable aggregated analysis result for one password."""
-
     password:        str
     score:           int    # 0-100
     strength_label:  str    # e.g. "Strong"
