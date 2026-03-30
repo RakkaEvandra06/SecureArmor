@@ -1,10 +1,10 @@
 from __future__ import annotations
-
+ 
 import getpass
 import sys
-
+ 
 import click
-
+ 
 from .analyzer import PasswordAnalyzer
 from .display import (
     print_analysis,
@@ -64,7 +64,6 @@ def check(password: str | None, show_password: bool, output_json: bool) -> None:
     else:
         _interactive_loop(show_password=show_password, output_json=output_json)
 
-
 @cli.command()
 @click.option(
     "--show-password",
@@ -107,9 +106,8 @@ def _run_analysis(password: str, *, show_password: bool, output_json: bool) -> N
     else:
         print_analysis(analysis, show_password=show_password)
 
-
 def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
-    """Run a REPL that analyses passwords until the user quits."""
+
     if not output_json:
         print_banner()
 
@@ -137,8 +135,8 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
             print_separator()
             print()
 
-
 def _warn_insecure_flag() -> None:
+    """Print a warning to stderr when a password is passed via --password."""
     click.echo(
         "Warning: Passing a password via --password may expose it in your "
         "shell history. Consider using the interactive prompt instead.\n",
