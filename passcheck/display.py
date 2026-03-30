@@ -22,26 +22,24 @@ _COLOUR_MAP: dict[str, str] = {
     "bright_red":   Fore.LIGHTRED_EX,
 }
 
-
 def _coloured(text: str, colour_key: str) -> str:
+    """Wrap *text* in the ANSI escape codes for *colour_key*."""
     return f"{_COLOUR_MAP.get(colour_key, '')}{text}{Style.RESET_ALL}"
 
-
 def _bold(text: str) -> str:
+    """Wrap *text* in the ANSI bright/bold escape code."""
     return f"{Style.BRIGHT}{text}{Style.RESET_ALL}"
 
-
 def _dim(text: str) -> str:
+    """Wrap *text* in the ANSI dim escape code."""
     return f"{Style.DIM}{text}{Style.RESET_ALL}"
-
 
 # ---------------------------------------------------------------------------
 # Public rendering functions
 # ---------------------------------------------------------------------------
 
-
 def print_analysis(analysis: PasswordAnalysis, *, show_password: bool = False) -> None:
-    """Render a full human-readable analysis to stdout."""
+
     _print_header(analysis, show_password=show_password)
     _print_score_panel(analysis)
     _print_criteria_table(analysis)
@@ -49,14 +47,12 @@ def print_analysis(analysis: PasswordAnalysis, *, show_password: bool = False) -
         _print_suggestions(analysis)
     print()
 
-
 def print_analysis_json(analysis: PasswordAnalysis) -> None:
-    """Render the analysis as indented JSON to stdout."""
+    """Render *analysis* as indented JSON to stdout."""
     print(json.dumps(criteria_summary(analysis), indent=2))
 
-
 def print_banner() -> None:
-    """Print the PassCheck welcome banner."""
+    """Print the PassCheck welcome banner to stdout."""
     width = 60
     print()
     print(_coloured("╔" + "═" * width + "╗", "bright_green"))
@@ -67,7 +63,6 @@ def print_banner() -> None:
     )
     print(_coloured("╚" + "═" * width + "╝", "bright_green"))
     print(_dim("  Type a password to analyse it, or 'quit'/'exit' to leave.\n"))
-
 
 def print_separator() -> None:
     """Print a horizontal rule between analysis blocks."""
@@ -84,14 +79,12 @@ def _masked(password: str) -> str:
         return "*" * length
     return password[0] + "*" * (length - 2) + password[-1]
 
-
 def _print_header(analysis: PasswordAnalysis, *, show_password: bool) -> None:
     display = analysis.password if show_password else _masked(analysis.password)
     print(
         f"\n  {_bold('Password:')} {_dim(display)}"
         f"  {_dim(f'({len(analysis.password)} chars)')}"
     )
-
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
     color = analysis.strength_color
@@ -111,7 +104,6 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
     )
     print()
 
-
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     print(f"  {'':2}  {_bold('Criterion'):<26}  {_bold('Score'):>8}  {_dim('Detail')}")
     print(_dim("  " + "─" * 62))
@@ -121,7 +113,6 @@ def _print_criteria_table(analysis: PasswordAnalysis) -> None:
         name_col   = c.name[:26].ljust(26)
         print(f"  {icon}   {name_col}  {score_cell}  {_dim(c.detail)}")
     print()
-
 
 def _print_suggestions(analysis: PasswordAnalysis) -> None:
     print(f"  {_coloured(_bold('Suggestions'), 'yellow')}")
