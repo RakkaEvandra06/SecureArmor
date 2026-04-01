@@ -12,7 +12,6 @@ class CriterionResult:
     detail:     str   # one-line explanation shown in the criteria table
     suggestion: str = ""  # improvement tip shown only when not passed
 
-
 @dataclass(frozen=True)
 class PasswordAnalysis:
     """Immutable aggregated analysis result for one password."""
