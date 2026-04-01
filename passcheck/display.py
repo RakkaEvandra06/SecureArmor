@@ -39,7 +39,7 @@ def _dim(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def print_analysis(analysis: PasswordAnalysis, *, show_password: bool = False) -> None:
-
+    """Render a full human-readable analysis block to stdout."""
     _print_header(analysis, show_password=show_password)
     _print_score_panel(analysis)
     _print_criteria_table(analysis)
