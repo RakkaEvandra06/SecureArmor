@@ -1,10 +1,10 @@
 from __future__ import annotations
-
+ 
 import math
 import string
 from collections import Counter
 from dataclasses import dataclass
-
+ 
 from .constants import (
     COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
@@ -21,7 +21,6 @@ from .constants import (
 )
 from .models import CriterionResult, PasswordAnalysis
 
-
 @dataclass(frozen=True)
 class _CharProfile:
 
@@ -31,7 +30,7 @@ class _CharProfile:
     has_digit:     bool
     has_special:   bool
     has_non_ascii: bool
-    char_counts:   Counter  # Counter of pw.lower() characters
+    char_counts:   Counter  # Counter of raw (case-sensitive) characters
 
     @classmethod
     def from_password(cls, pw: str) -> "_CharProfile":
@@ -44,7 +43,9 @@ class _CharProfile:
             has_digit     = any(c.isdigit() for c in chars),
             has_special   = any(c in SPECIAL_CHARS for c in chars),
             has_non_ascii = any(c not in string.printable for c in chars),
-            char_counts   = Counter(pw.lower()),
+            # BUG FIX #3: gunakan pw asli (case-sensitive) agar 'A' dan 'a'
+            # tidak dianggap karakter yang sama saat menghitung repetisi.
+            char_counts   = Counter(pw),
         )
 
 class PasswordAnalyzer:
@@ -64,7 +65,9 @@ class PasswordAnalyzer:
             )
 
         profile = _CharProfile.from_password(password)
- 
+
+        entropy_bits = self._calculate_entropy(profile)
+
         criteria: list[CriterionResult] = [
             self._check_length_minimum(profile),
             self._check_length_good(profile),
@@ -77,20 +80,20 @@ class PasswordAnalyzer:
             self._check_no_common_password(password),
             self._check_no_keyboard_pattern(password),
             self._check_no_repeated_chars(profile),
-            self._check_entropy(profile),
+            self._check_entropy(entropy_bits),
         ]
 
         score = min(100, sum(c.score for c in criteria))
         label, color = self._strength_band(score)
         suggestions = [c.suggestion for c in criteria if not c.passed and c.suggestion]
- 
+
         return PasswordAnalysis(
             password       = password,
             score          = score,
             strength_label = label,
             strength_color = color,
             criteria       = criteria,
-            entropy_bits   = self._calculate_entropy(profile),
+            entropy_bits   = entropy_bits,
             suggestions    = suggestions,
         )
 
@@ -182,7 +185,7 @@ class PasswordAnalyzer:
             score      = w if profile.has_special else 0,
             max_score  = w,
             detail     = "Contains special characters" if profile.has_special else "No special characters found",
-            suggestion = f"Add special characters such as: {SPECIAL_CHARS[:12]}..." if not profile.has_special else "",
+            suggestion = "Add special characters such as: ! @ # $ % ^ & *" if not profile.has_special else "",
         )
 
     def _check_char_variety(self, profile: _CharProfile) -> CriterionResult:
@@ -241,7 +244,7 @@ class PasswordAnalyzer:
         )
 
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
-
+        """Deduct all points if a single character dominates the password."""
         w = SCORE_WEIGHTS["no_repeated_chars"]
         most_common_char, most_common_count = profile.char_counts.most_common(1)[0]
         ratio = most_common_count / profile.length
@@ -258,17 +261,16 @@ class PasswordAnalyzer:
             suggestion = "Avoid repeating the same character too many times." if not passed else "",
         )
 
-    def _check_entropy(self, profile: _CharProfile) -> CriterionResult:
+    def _check_entropy(self, entropy_bits: float) -> CriterionResult:
         """Award bonus points if the estimated entropy meets the threshold."""
-        bits = self._calculate_entropy(profile)
-        passed = bits >= ENTROPY_GOOD_THRESHOLD
+        passed = entropy_bits >= ENTROPY_GOOD_THRESHOLD
         w = SCORE_WEIGHTS["entropy_bonus"]
         return CriterionResult(
             name       = "Entropy",
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
-            detail     = f"Estimated entropy: {bits:.1f} bits (good >= {ENTROPY_GOOD_THRESHOLD:.0f} bits)",
+            detail     = f"Estimated entropy: {entropy_bits:.1f} bits (good >= {ENTROPY_GOOD_THRESHOLD:.0f} bits)",
             suggestion = "Increase length and character variety to raise entropy." if not passed else "",
         )
 
@@ -278,7 +280,7 @@ class PasswordAnalyzer:
 
     @staticmethod
     def _calculate_entropy(profile: _CharProfile) -> float:
-
+        """Estimate password entropy (bits) based on character pool size."""
         if profile.length == 0:
             return 0.0
 
