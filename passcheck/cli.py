@@ -1,10 +1,10 @@
 from __future__ import annotations
- 
+
 import getpass
 import sys
- 
+
 import click
- 
+
 from .analyzer import PasswordAnalyzer
 from .display import (
     print_analysis,
@@ -30,7 +30,7 @@ _EXIT_ERROR = 1
 )
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-
+    """PassCheck — Password Strength Analyser."""
     if ctx.invoked_subcommand is None:
         ctx.invoke(check)
 
@@ -57,7 +57,7 @@ def cli(ctx: click.Context) -> None:
     help="Output results as JSON.",
 )
 def check(password: str | None, show_password: bool, output_json: bool) -> None:
-
+    """Analyse a single password."""
     if password is not None:
         _warn_insecure_flag()
         _run_analysis(password, show_password=show_password, output_json=output_json)
@@ -78,7 +78,7 @@ def check(password: str | None, show_password: bool, output_json: bool) -> None:
     help="Output results as JSON.",
 )
 def batch(show_password: bool, output_json: bool) -> None:
-
+    """Analyse multiple passwords from stdin (one per line)."""
     passwords = [line.rstrip("\n") for line in sys.stdin if line.strip()]
     if not passwords:
         click.echo("Error: No passwords received on stdin.", err=True)
@@ -107,7 +107,7 @@ def _run_analysis(password: str, *, show_password: bool, output_json: bool) -> N
         print_analysis(analysis, show_password=show_password)
 
 def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
-
+    """Run the interactive prompt loop until the user quits."""
     if not output_json:
         print_banner()
 
