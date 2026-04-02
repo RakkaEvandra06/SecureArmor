@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+ 
 __all__ = [
     "SCORE_WEIGHTS",
     "LENGTH_MINIMUM",
@@ -78,7 +78,7 @@ STRENGTH_BANDS: list[tuple[int, str, str]] = [
     (20, "Weak",        "red"),
     ( 0, "Very Weak",   "bright_red"),
 ]
- 
+
 assert STRENGTH_BANDS == sorted(STRENGTH_BANDS, key=lambda t: t[0], reverse=True), (
     "STRENGTH_BANDS must be sorted by threshold descending"
 )
@@ -94,11 +94,10 @@ SPECIAL_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
 # avoid hidden double-penalties.
 # ---------------------------------------------------------------------------
 KEYBOARD_PATTERNS: list[str] = [
-    "qwerty", "qwertz", "azerty",
-    "asdfgh", "zxcvbn", "qazwsx",
-    "123456", "234567", "345678", "456789", "567890",
-    "12345678", "123456789", "1234567890",
-    "987654", "876543", "765432", "654321",
+    "qwertz", "azerty",
+    "asdfgh", "zxcvbn",
+    "234567", "345678", "456789", "567890",
+    "987654", "876543", "765432",
     "abcdef", "abcdefg", "abcdefgh",
     "0987654321",
 ]
