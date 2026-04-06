@@ -1,5 +1,5 @@
 from __future__ import annotations
- 
+
 __all__ = [
     "SCORE_WEIGHTS",
     "LENGTH_MINIMUM",
@@ -94,12 +94,22 @@ SPECIAL_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
 # avoid hidden double-penalties.
 # ---------------------------------------------------------------------------
 KEYBOARD_PATTERNS: list[str] = [
-    "qwertz", "azerty",
+    # Horizontal rows — left-to-right
+    "qwerty", "qwertz", "azerty",
     "asdfgh", "zxcvbn",
+    # Horizontal rows — right-to-left (reverses)
+    "ytrewq",
+    "hgfdsa", "nbvcxz",
+    # Numeric sequences — ascending / descending
     "234567", "345678", "456789", "567890",
     "987654", "876543", "765432",
-    "abcdef", "abcdefg", "abcdefgh",
     "0987654321",
+    # Alphabetical sequences
+    "abcdef", "abcdefg", "abcdefgh",
+    # Vertical column walks (left column, second column, third column)
+    "1qaz", "2wsx", "3edc",
+    # Vertical column walks — reversed
+    "zaq1", "xsw2", "cde3",
 ]
 
 KEYBOARD_PATTERN_MIN_LEN: int = 4
@@ -111,7 +121,7 @@ KEYBOARD_PATTERN_MIN_LEN: int = 4
 # ---------------------------------------------------------------------------
 COMMON_PASSWORDS: frozenset[str] = frozenset({
     "password", "password1", "password123", "123456", "123456789",
-    "12345678", "12345", "1234567", "qwerty", "abc123",
+    "12345678", "12345", "1234567", "abc123",
     "monkey", "1234567890", "letmein", "trustno1", "dragon",
     "baseball", "iloveyou", "master", "sunshine", "ashley",
     "bailey", "passw0rd", "shadow", "123123", "654321",
