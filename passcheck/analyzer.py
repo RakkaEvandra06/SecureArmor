@@ -1,10 +1,10 @@
 from __future__ import annotations
- 
+
 import math
 import string
 from collections import Counter
 from dataclasses import dataclass
- 
+
 from .constants import (
     COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
@@ -34,18 +34,32 @@ class _CharProfile:
 
     @classmethod
     def from_password(cls, pw: str) -> "_CharProfile":
-        """Build a profile from *pw* in a single O(n) pass."""
-        chars = set(pw)
+        """Build a profile from *pw* in a genuine single O(n) pass."""
+        has_upper     = False
+        has_lower     = False
+        has_digit     = False
+        has_special   = False
+        has_non_ascii = False
+        counts: Counter = Counter()
+
+        for c in pw:
+            counts[c] += 1
+            # Each guard lets the branch become a no-op once the flag is set,
+            # matching the short-circuit behaviour of the original any() calls.
+            if not has_upper     and c.isupper():               has_upper     = True
+            if not has_lower     and c.islower():               has_lower     = True
+            if not has_digit     and c.isdigit():               has_digit     = True
+            if not has_special   and c in SPECIAL_CHARS:        has_special   = True
+            if not has_non_ascii and c not in string.printable: has_non_ascii = True
+
         return cls(
             length        = len(pw),
-            has_upper     = any(c.isupper() for c in chars),
-            has_lower     = any(c.islower() for c in chars),
-            has_digit     = any(c.isdigit() for c in chars),
-            has_special   = any(c in SPECIAL_CHARS for c in chars),
-            has_non_ascii = any(c not in string.printable for c in chars),
-            # BUG FIX #3: gunakan pw asli (case-sensitive) agar 'A' dan 'a'
-            # tidak dianggap karakter yang sama saat menghitung repetisi.
-            char_counts   = Counter(pw),
+            has_upper     = has_upper,
+            has_lower     = has_lower,
+            has_digit     = has_digit,
+            has_special   = has_special,
+            has_non_ascii = has_non_ascii,
+            char_counts   = counts,
         )
 
 class PasswordAnalyzer:
@@ -307,4 +321,10 @@ class PasswordAnalyzer:
         for threshold, label, color in STRENGTH_BANDS:
             if score >= threshold:
                 return label, color
-        return "Very Weak", "bright_red"
+        # Reachable only if STRENGTH_BANDS is misconfigured (e.g. the (0, …)
+        # sentinel is removed).  Raises loudly rather than silently returning
+        # a stale hard-coded value.
+        raise ValueError(
+            f"No matching strength band found for score {score}. "
+            "Ensure STRENGTH_BANDS contains an entry with threshold 0."
+        )
