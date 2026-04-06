@@ -113,7 +113,11 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
 
     while True:
         try:
-            pw = input() if output_json else getpass.getpass("  Enter password: ")
+            # Always suppress terminal echo regardless of output format.
+            # In JSON mode pass an empty string so no prompt text leaks into
+            # the JSON stream; in human mode show the familiar prompt.
+            prompt = "" if output_json else "  Enter password: "
+            pw = getpass.getpass(prompt)
         except (KeyboardInterrupt, EOFError):
             if not output_json:
                 print("\n  Goodbye!\n")
