@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import math
-import string
 from collections import Counter
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from .constants import (
     COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
-    KEYBOARD_PATTERN_MIN_LEN,
     KEYBOARD_PATTERNS,
     LENGTH_EXCELLENT,
     LENGTH_GOOD,
@@ -21,6 +20,7 @@ from .constants import (
 )
 from .models import CriterionResult, PasswordAnalysis
 
+
 @dataclass(frozen=True)
 class _CharProfile:
 
@@ -30,7 +30,7 @@ class _CharProfile:
     has_digit:     bool
     has_special:   bool
     has_non_ascii: bool
-    char_counts:   Counter  # Counter of raw (case-sensitive) characters
+    char_counts: MappingProxyType  # read-only view of raw (case-sensitive) counts
 
     @classmethod
     def from_password(cls, pw: str) -> "_CharProfile":
@@ -46,11 +46,11 @@ class _CharProfile:
             counts[c] += 1
             # Each guard lets the branch become a no-op once the flag is set,
             # matching the short-circuit behaviour of the original any() calls.
-            if not has_upper     and c.isupper():               has_upper     = True
-            if not has_lower     and c.islower():               has_lower     = True
-            if not has_digit     and c.isdigit():               has_digit     = True
-            if not has_special   and c in SPECIAL_CHARS:        has_special   = True
-            if not has_non_ascii and c not in string.printable: has_non_ascii = True
+            if not has_upper   and c.isupper():        has_upper   = True
+            if not has_lower   and c.islower():        has_lower   = True
+            if not has_digit   and c.isdigit():        has_digit   = True
+            if not has_special and c in SPECIAL_CHARS: has_special = True
+            if not has_non_ascii and ord(c) > 127: has_non_ascii = True
 
         return cls(
             length        = len(pw),
@@ -59,7 +59,9 @@ class _CharProfile:
             has_digit     = has_digit,
             has_special   = has_special,
             has_non_ascii = has_non_ascii,
-            char_counts   = counts,
+            # Wrap in MappingProxyType so the frozen dataclass is genuinely
+            # immutable — no mutation through the char_counts attribute.
+            char_counts   = MappingProxyType(counts),
         )
 
 class PasswordAnalyzer:
@@ -69,7 +71,6 @@ class PasswordAnalyzer:
     # ------------------------------------------------------------------
 
     def analyze(self, password: str) -> PasswordAnalysis:
-
         if not password:
             raise ValueError("Password must not be empty.")
         if len(password) > LENGTH_MAXIMUM:
@@ -82,7 +83,7 @@ class PasswordAnalyzer:
 
         entropy_bits = self._calculate_entropy(profile)
 
-        criteria: list[CriterionResult] = [
+        criteria_list: list[CriterionResult] = [
             self._check_length_minimum(profile),
             self._check_length_good(profile),
             self._check_length_excellent(profile),
@@ -97,18 +98,20 @@ class PasswordAnalyzer:
             self._check_entropy(entropy_bits),
         ]
 
-        score = min(100, sum(c.score for c in criteria))
+        score = min(100, sum(c.score for c in criteria_list))
         label, color = self._strength_band(score)
-        suggestions = [c.suggestion for c in criteria if not c.passed and c.suggestion]
+        suggestions_list = [
+            c.suggestion for c in criteria_list if not c.passed and c.suggestion
+        ]
 
         return PasswordAnalysis(
             password       = password,
             score          = score,
             strength_label = label,
             strength_color = color,
-            criteria       = criteria,
+            criteria       = tuple(criteria_list),
             entropy_bits   = entropy_bits,
-            suggestions    = suggestions,
+            suggestions    = tuple(suggestions_list),
         )
 
     # ------------------------------------------------------------------
@@ -240,7 +243,7 @@ class PasswordAnalyzer:
         found: list[str] = [
             pattern
             for pattern in KEYBOARD_PATTERNS
-            if len(pattern) >= KEYBOARD_PATTERN_MIN_LEN and pattern in pw_lower
+            if pattern in pw_lower
         ]
         passed = not found
         w = SCORE_WEIGHTS["no_keyboard_pattern"]
@@ -260,7 +263,7 @@ class PasswordAnalyzer:
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Deduct all points if a single character dominates the password."""
         w = SCORE_WEIGHTS["no_repeated_chars"]
-        most_common_char, most_common_count = profile.char_counts.most_common(1)[0]
+        most_common_char, most_common_count = Counter(profile.char_counts).most_common(1)[0]
         ratio = most_common_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
         return CriterionResult(
