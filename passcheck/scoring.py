@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 
 from .models import CriterionResult, PasswordAnalysis
-from .constants import STRENGTH_BANDS
 
 def score_bar(score: int, width: int = 20) -> str:
     """Return a text progress bar representing *score* (0-100)."""
@@ -27,7 +26,7 @@ def criteria_summary(analysis: PasswordAnalysis) -> dict[str, object]:
         "entropy_bits": round(analysis.entropy_bits, 2),
         "passed":       analysis.passed_count,
         "total":        analysis.total_criteria,
-        "suggestions":  analysis.suggestions,
+        "suggestions":  list(analysis.suggestions),
         "criteria": [
             {
                 "name":      c.name,
