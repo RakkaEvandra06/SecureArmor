@@ -93,6 +93,8 @@ SPECIAL_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
 # KEYBOARD_PATTERN_MIN_LEN).  Entries must not duplicate COMMON_PASSWORDS to
 # avoid hidden double-penalties.
 # ---------------------------------------------------------------------------
+KEYBOARD_PATTERN_MIN_LEN: int = 4
+
 KEYBOARD_PATTERNS: list[str] = [
     # Horizontal rows — left-to-right
     "qwerty", "qwertz", "azerty",
@@ -112,7 +114,12 @@ KEYBOARD_PATTERNS: list[str] = [
     "zaq1", "xsw2", "cde3",
 ]
 
-KEYBOARD_PATTERN_MIN_LEN: int = 4
+assert all(len(p) >= KEYBOARD_PATTERN_MIN_LEN for p in KEYBOARD_PATTERNS), (
+    f"Every KEYBOARD_PATTERNS entry must be at least "
+    f"{KEYBOARD_PATTERN_MIN_LEN} characters. "
+    f"Offending entries: "
+    f"{[p for p in KEYBOARD_PATTERNS if len(p) < KEYBOARD_PATTERN_MIN_LEN]}"
+)
 
 # ---------------------------------------------------------------------------
 # Common passwords list (subset — extend or load from file in production).
