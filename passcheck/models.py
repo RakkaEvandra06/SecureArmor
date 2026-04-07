@@ -19,9 +19,9 @@ class PasswordAnalysis:
     score:           int    # 0-100
     strength_label:  str    # e.g. "Strong"
     strength_color:  str    # colorama colour key
-    criteria:        list[CriterionResult] = field(default_factory=list)
-    entropy_bits:    float  = 0.0
-    suggestions:     list[str] = field(default_factory=list)
+    criteria:        tuple[CriterionResult, ...] = field(default_factory=tuple)
+    entropy_bits:    float                        = 0.0
+    suggestions:     tuple[str, ...]             = field(default_factory=tuple)
 
     @property
     def passed_count(self) -> int:
