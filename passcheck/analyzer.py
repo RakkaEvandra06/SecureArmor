@@ -20,17 +20,16 @@ from .constants import (
 )
 from .models import CriterionResult, PasswordAnalysis
 
-
 @dataclass(frozen=True)
 class _CharProfile:
-
     length:        int
     has_upper:     bool
     has_lower:     bool
     has_digit:     bool
     has_special:   bool
     has_non_ascii: bool
-    char_counts: MappingProxyType  # read-only view of raw (case-sensitive) counts
+    _raw_counts:   Counter          # original, mutable-but-private Counter
+    char_counts:   MappingProxyType # read-only view (same underlying data)
 
     @classmethod
     def from_password(cls, pw: str) -> "_CharProfile":
@@ -44,13 +43,11 @@ class _CharProfile:
 
         for c in pw:
             counts[c] += 1
-            # Each guard lets the branch become a no-op once the flag is set,
-            # matching the short-circuit behaviour of the original any() calls.
             if not has_upper   and c.isupper():        has_upper   = True
             if not has_lower   and c.islower():        has_lower   = True
             if not has_digit   and c.isdigit():        has_digit   = True
             if not has_special and c in SPECIAL_CHARS: has_special = True
-            if not has_non_ascii and ord(c) > 127: has_non_ascii = True
+            if not has_non_ascii and ord(c) > 127:     has_non_ascii = True
 
         return cls(
             length        = len(pw),
@@ -59,10 +56,10 @@ class _CharProfile:
             has_digit     = has_digit,
             has_special   = has_special,
             has_non_ascii = has_non_ascii,
-            # Wrap in MappingProxyType so the frozen dataclass is genuinely
-            # immutable — no mutation through the char_counts attribute.
+            _raw_counts   = counts,
             char_counts   = MappingProxyType(counts),
         )
+
 
 class PasswordAnalyzer:
 
@@ -263,9 +260,15 @@ class PasswordAnalyzer:
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Deduct all points if a single character dominates the password."""
         w = SCORE_WEIGHTS["no_repeated_chars"]
-        most_common_char, most_common_count = Counter(profile.char_counts).most_common(1)[0]
+
+        folded: Counter = Counter()
+        for char, count in profile._raw_counts.items():
+            folded[char.lower()] += count
+
+        most_common_char, most_common_count = folded.most_common(1)[0]
         ratio = most_common_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
+
         return CriterionResult(
             name       = "No excessive repetition",
             passed     = passed,
@@ -297,26 +300,31 @@ class PasswordAnalyzer:
 
     @staticmethod
     def _calculate_entropy(profile: _CharProfile) -> float:
-        """Estimate password entropy (bits) based on character pool size."""
+        """Estimate password entropy (bits) based on character pool and distribution."""
         if profile.length == 0:
             return 0.0
 
+        # --- 1. Pool-based (upper-bound) entropy ---
         pool = 0
-        if profile.has_lower:
-            pool += 26
-        if profile.has_upper:
-            pool += 26
-        if profile.has_digit:
-            pool += 10
-        if profile.has_special:
-            pool += len(SPECIAL_CHARS)
-        if profile.has_non_ascii:
-            pool += 32   # conservative non-ASCII bonus
+        if profile.has_lower:     pool += 26
+        if profile.has_upper:     pool += 26
+        if profile.has_digit:     pool += 10
+        if profile.has_special:   pool += len(SPECIAL_CHARS)
+        if profile.has_non_ascii: pool += 32   # conservative non-ASCII bonus
 
         if pool == 0:
             return 0.0
 
-        return math.log2(pool) * profile.length
+        pool_entropy = math.log2(pool) * profile.length
+
+        # --- 2. Shannon entropy (distribution-aware) ---
+        total = profile.length
+        shannon_bits = -sum(
+            (count / total) * math.log2(count / total)
+            for count in profile._raw_counts.values()
+        ) * total
+
+        return min(pool_entropy, shannon_bits)
 
     @staticmethod
     def _strength_band(score: int) -> tuple[str, str]:
@@ -324,9 +332,6 @@ class PasswordAnalyzer:
         for threshold, label, color in STRENGTH_BANDS:
             if score >= threshold:
                 return label, color
-        # Reachable only if STRENGTH_BANDS is misconfigured (e.g. the (0, …)
-        # sentinel is removed).  Raises loudly rather than silently returning
-        # a stale hard-coded value.
         raise ValueError(
             f"No matching strength band found for score {score}. "
             "Ensure STRENGTH_BANDS contains an entry with threshold 0."
