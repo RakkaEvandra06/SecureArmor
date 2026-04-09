@@ -145,8 +145,6 @@ assert all(entry == entry.lower() for entry in COMMON_PASSWORDS), (
     "All COMMON_PASSWORDS entries must be lower-case"
 )
 
-# Detect overlap between the two lists and fail fast.  The temporary name
-# is deleted immediately so it never leaks into the module namespace.
 _overlap = frozenset(KEYBOARD_PATTERNS) & COMMON_PASSWORDS
 assert not _overlap, (
     f"Entries in both KEYBOARD_PATTERNS and COMMON_PASSWORDS: {sorted(_overlap)}. "
