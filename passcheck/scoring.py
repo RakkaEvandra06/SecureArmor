@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import codecs
 import sys
 
 from .models import CriterionResult, PasswordAnalysis
+
+def _is_utf_encoding(encoding: str) -> bool:
+    """Return True if *encoding* resolves to a UTF variant via the codec registry.
+    """
+    try:
+        return codecs.lookup(encoding).name in ("utf-8", "utf-8-sig", "utf-16", "utf-32")
+    except LookupError:
+        return False
 
 def score_bar(score: int, width: int = 20) -> str:
     """Return a text progress bar representing *score* (0-100)."""
     filled = round(score / 100 * width)
     encoding = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
-    if encoding.lower().replace("-", "") in ("utf8", "utf16", "utf32"):
+    if _is_utf_encoding(encoding):
         fill_char, empty_char = "█", "░"
     else:
         fill_char, empty_char = "#", "-"
