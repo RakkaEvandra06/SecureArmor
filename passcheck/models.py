@@ -5,27 +5,45 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class CriterionResult:
     """Immutable result for a single scoring criterion."""
-    name:       str   # human-readable name
-    passed:     bool  # did the password satisfy this criterion?
-    score:      int   # points awarded (0 if not passed)
-    max_score:  int   # maximum possible points for this criterion
-    detail:     str   # one-line explanation shown in the criteria table
-    suggestion: str = ""  # improvement tip shown only when not passed
+
+    name:       str
+    passed:     bool
+    score:      int
+    max_score:  int
+    detail:     str
+    suggestion: str = ""
+
+    def __post_init__(self) -> None:
+        if self.score < 0:
+            raise ValueError(
+                f"CriterionResult.score must be non-negative, got {self.score!r}."
+            )
+        if self.max_score <= 0:
+            raise ValueError(
+                f"CriterionResult.max_score must be positive, got {self.max_score!r}."
+            )
+        if self.passed and self.score == 0 and self.suggestion:
+            # A passed criterion should never carry a suggestion.
+            raise ValueError(
+                "A passed CriterionResult must not carry a non-empty suggestion."
+            )
 
 @dataclass(frozen=True)
 class PasswordAnalysis:
     """Immutable aggregated analysis result for one password."""
+
     password:        str
-    score:           int    # 0-100
-    strength_label:  str    # e.g. "Strong"
-    strength_color:  str    # colorama colour key
-    criteria:        tuple[CriterionResult, ...] = field(default_factory=tuple)
-    entropy_bits:    float                        = 0.0
-    suggestions:     tuple[str, ...]             = field(default_factory=tuple)
+    score:           int
+    strength_label:  str
+    strength_color:  str
+
+    criteria:     tuple[CriterionResult, ...] = field(default_factory=tuple)
+    entropy_bits: float                        = 0.0
+    suggestions:  tuple[str, ...]             = field(default_factory=tuple)
 
     @property
     def passed_count(self) -> int:
-        """Number of criteria the password satisfied."""
+        """Number of criteria the password actively satisfied (not skipped)."""
         return sum(1 for c in self.criteria if c.passed)
 
     @property
