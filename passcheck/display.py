@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 
 import colorama
 from colorama import Fore, Style
@@ -9,6 +10,14 @@ colorama.init(autoreset=True)
 
 from .models import PasswordAnalysis
 from .scoring import criteria_summary, score_bar
+
+# ---------------------------------------------------------------------------
+# Layout constants
+# ---------------------------------------------------------------------------
+
+_BANNER_WIDTH:    int = 60
+_SEPARATOR_WIDTH: int = 64
+_CRITERION_NAME_WIDTH: int = 26
 
 # ---------------------------------------------------------------------------
 # Internal colour map
@@ -24,7 +33,16 @@ _COLOUR_MAP: dict[str, str] = {
 
 def _coloured(text: str, colour_key: str) -> str:
     """Wrap *text* in the ANSI escape codes for *colour_key*."""
-    return f"{_COLOUR_MAP.get(colour_key, '')}{text}{Style.RESET_ALL}"
+    code = _COLOUR_MAP.get(colour_key)
+    if code is None:
+        warnings.warn(
+            f"Unknown colour key {colour_key!r}. "
+            f"Valid keys: {sorted(_COLOUR_MAP)}.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return text
+    return f"{code}{text}{Style.RESET_ALL}"
 
 def _bold(text: str) -> str:
     """Wrap *text* in the ANSI bright/bold escape code."""
@@ -53,20 +71,19 @@ def print_analysis_json(analysis: PasswordAnalysis) -> None:
 
 def print_banner() -> None:
     """Print the PassCheck welcome banner to stdout."""
-    width = 60
     print()
-    print(_coloured("╔" + "═" * width + "╗", "bright_green"))
+    print(_coloured("╔" + "═" * _BANNER_WIDTH + "╗", "bright_green"))
     print(
         _coloured("║", "bright_green")
-        + _bold("  PassCheck — Password Strength Analyser  ".center(width))
+        + _bold("  PassCheck — Password Strength Analyser  ".center(_BANNER_WIDTH))
         + _coloured("║", "bright_green")
     )
-    print(_coloured("╚" + "═" * width + "╝", "bright_green"))
+    print(_coloured("╚" + "═" * _BANNER_WIDTH + "╝", "bright_green"))
     print(_dim("  Type a password to analyse it, or 'quit'/'exit' to leave.\n"))
 
 def print_separator() -> None:
     """Print a horizontal rule between analysis blocks."""
-    print(_dim("─" * 64))
+    print(_dim("─" * _SEPARATOR_WIDTH))
 
 # ---------------------------------------------------------------------------
 # Private rendering helpers
@@ -105,12 +122,13 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
     print()
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
-    print(f"  {'':2}  {_bold('Criterion'):<26}  {_bold('Score'):>8}  {_dim('Detail')}")
-    print(_dim("  " + "─" * 62))
+    col = _CRITERION_NAME_WIDTH
+    print(f"  {'':2}  {_bold('Criterion'):<{col}}  {_bold('Score'):>8}  {_dim('Detail')}")
+    print(_dim("  " + "─" * (_SEPARATOR_WIDTH - 2)))
     for c in analysis.criteria:
         icon       = _coloured("✔", "green") if c.passed else _coloured("✘", "red")
         score_cell = _coloured(f"+{c.score}", "green") if c.passed else _dim(f"+0/{c.max_score}")
-        name_col   = c.name[:26].ljust(26)
+        name_col   = c.name[:col].ljust(col)
         print(f"  {icon}   {name_col}  {score_cell}  {_dim(c.detail)}")
     print()
 
