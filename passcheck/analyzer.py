@@ -8,7 +8,6 @@ from types import MappingProxyType
 from .constants import (
     COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
-    KEYBOARD_PATTERN_MIN_LEN,
     KEYBOARD_PATTERNS,
     LENGTH_EXCELLENT,
     LENGTH_GOOD,
@@ -16,20 +15,15 @@ from .constants import (
     LENGTH_MINIMUM,
     REPEATED_CHAR_RATIO,
     SCORE_WEIGHTS,
+    SHANNON_WEIGHT,
     SPECIAL_CHARS,
     STRENGTH_BANDS,
 )
 from .models import CriterionResult, PasswordAnalysis
 
-# ---------------------------------------------------------------------------
-# Entropy weighting constant
-# ---------------------------------------------------------------------------
-_SHANNON_WEIGHT: float = 0.4
-
 @dataclass(frozen=True)
 class _CharProfile:
-    """Immutable character-level profile of a password.
-"""
+    """Immutable character-level profile of a password."""
 
     length:        int
     has_upper:     bool
@@ -96,7 +90,6 @@ class _CharProfile:
     def most_common(self, n: int = 1) -> tuple[tuple[str, int], ...]:
         """Return the *n* most common ``(char, count)`` pairs, descending."""
         return self._sorted_counts[:n]
-
 
 class PasswordAnalyzer:
     """Stateless password strength analyser."""
@@ -204,7 +197,7 @@ class PasswordAnalyzer:
             ),
             suggestion = (
                 f"Consider a passphrase of {LENGTH_EXCELLENT}+ characters "
-                "for maximum length."
+                "for maximum security."
                 if not passed else ""
             ),
         )
@@ -333,7 +326,7 @@ class PasswordAnalyzer:
         found: list[str] = [
             pattern
             for pattern in KEYBOARD_PATTERNS
-            if len(pattern) >= KEYBOARD_PATTERN_MIN_LEN and pattern in pw_lower
+            if pattern in pw_lower
         ]
         passed = not found
         w      = SCORE_WEIGHTS["no_keyboard_pattern"]
@@ -386,15 +379,13 @@ class PasswordAnalyzer:
         w = SCORE_WEIGHTS["entropy_bonus"]
 
         if not repetition_passed:
-            # Skipping is not the same as passing — use passed=False so the
-            # criteria table shows ✘ and passed_count is not inflated.
             return CriterionResult(
                 name       = "Entropy",
                 passed     = False,
                 score      = 0,
                 max_score  = w,
                 detail     = (
-                    f"Estimated entropy: {entropy_bits:.1f} bits "
+                    f"Estimated entropy: {{entropy_bits:.1f}} bits "
                     "— skipped (repetition penalty already applied)"
                 ),
                 # No suggestion: the repetition criterion already advises the user.
@@ -449,8 +440,8 @@ class PasswordAnalyzer:
 
         # --- 3. Weighted blend ---
         entropy_per_char = (
-            (1.0 - _SHANNON_WEIGHT) * pool_entropy_per_char
-            + _SHANNON_WEIGHT       * shannon_per_char
+            (1.0 - SHANNON_WEIGHT) * pool_entropy_per_char
+            + SHANNON_WEIGHT       * shannon_per_char
         )
 
         return max(0.0, entropy_per_char * profile.length)
