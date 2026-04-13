@@ -22,8 +22,12 @@ class CriterionResult:
             raise ValueError(
                 f"CriterionResult.max_score must be positive, got {self.max_score!r}."
             )
-        if self.passed and self.score == 0 and self.suggestion:
-            # A passed criterion should never carry a suggestion.
+        if self.score > self.max_score:
+            raise ValueError(
+                f"CriterionResult.score ({self.score}) must not exceed "
+                f"max_score ({self.max_score})."
+            )
+        if self.passed and self.suggestion:
             raise ValueError(
                 "A passed CriterionResult must not carry a non-empty suggestion."
             )
