@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import warnings
+import re
 
 import colorama
 from colorama import Fore, Style
@@ -35,13 +35,10 @@ def _coloured(text: str, colour_key: str) -> str:
     """Wrap *text* in the ANSI escape codes for *colour_key*."""
     code = _COLOUR_MAP.get(colour_key)
     if code is None:
-        warnings.warn(
+        raise ValueError(
             f"Unknown colour key {colour_key!r}. "
-            f"Valid keys: {sorted(_COLOUR_MAP)}.",
-            RuntimeWarning,
-            stacklevel=2,
+            f"Valid keys: {sorted(_COLOUR_MAP)}."
         )
-        return text
     return f"{code}{text}{Style.RESET_ALL}"
 
 def _bold(text: str) -> str:
@@ -51,6 +48,23 @@ def _bold(text: str) -> str:
 def _dim(text: str) -> str:
     """Wrap *text* in the ANSI dim escape code."""
     return f"{Style.DIM}{text}{Style.RESET_ALL}"
+
+# Matches any ANSI CSI escape sequence (colours, bold, dim, reset, …).
+_ANSI_ESC: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
+
+def _visible_len(s: str) -> int:
+    """Return the *printable* character count of *s*, ignoring ANSI codes."""
+    return len(_ANSI_ESC.sub("", s))
+
+def _ljust_ansi(s: str, width: int) -> str:
+    """Left-justify *s* to *width* **visible** characters, preserving ANSI codes."""
+    pad = width - _visible_len(s)
+    return s + " " * max(pad, 0)
+
+def _rjust_ansi(s: str, width: int) -> str:
+    """Right-justify *s* to *width* **visible** characters, preserving ANSI codes."""
+    pad = width - _visible_len(s)
+    return " " * max(pad, 0) + s
 
 # ---------------------------------------------------------------------------
 # Public rendering functions
@@ -123,13 +137,18 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     col = _CRITERION_NAME_WIDTH
-    print(f"  {'':2}  {_bold('Criterion'):<{col}}  {_bold('Score'):>8}  {_dim('Detail')}")
+    header_criterion = _ljust_ansi(_bold("Criterion"), col)
+    header_score     = _rjust_ansi(_bold("Score"), 8)
+    print(f"  {'':2}  {header_criterion}  {header_score}  {_dim('Detail')}")
     print(_dim("  " + "─" * (_SEPARATOR_WIDTH - 2)))
+
     for c in analysis.criteria:
         icon       = _coloured("✔", "green") if c.passed else _coloured("✘", "red")
         score_cell = _coloured(f"+{c.score}", "green") if c.passed else _dim(f"+0/{c.max_score}")
-        name_col   = c.name[:col].ljust(col)
-        print(f"  {icon}   {name_col}  {score_cell}  {_dim(c.detail)}")
+        name_col   = _ljust_ansi(c.name[:col], col)
+        score_col  = _rjust_ansi(score_cell, 8)
+        print(f"  {icon}   {name_col}  {score_col}  {_dim(c.detail)}")
+
     print()
 
 def _print_suggestions(analysis: PasswordAnalysis) -> None:
