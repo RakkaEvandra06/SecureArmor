@@ -14,6 +14,11 @@ def _is_utf_encoding(encoding: str) -> bool:
 
 def score_bar(score: int, width: int = 20) -> str:
     """Return a text progress bar representing *score* (0–100)."""
+    if isinstance(width, bool):
+        raise TypeError(
+            f"score_bar() requires an integer width, got bool. "
+            "Pass a plain int such as score_bar(score, width=20)."
+        )
     if not isinstance(width, int):
         raise TypeError(
             f"score_bar() requires an integer width, got {type(width).__name__!r}."
