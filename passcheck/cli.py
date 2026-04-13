@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import sys
+from enum import IntEnum
 
 import click
 
@@ -16,9 +17,13 @@ from .display import (
 # Module-level analyzer — stateless, so sharing one instance is safe.
 _analyzer = PasswordAnalyzer()
 
+# ---------------------------------------------------------------------------
 # Exit codes
-_EXIT_OK    = 0
-_EXIT_ERROR = 1
+# ---------------------------------------------------------------------------
+
+class _ExitCode(IntEnum):
+    OK    = 0
+    ERROR = 1
 
 # ---------------------------------------------------------------------------
 # CLI root
@@ -79,10 +84,19 @@ def check(password: str | None, show_password: bool, output_json: bool) -> None:
 )
 def batch(show_password: bool, output_json: bool) -> None:
     """Analyse multiple passwords from stdin (one per line)."""
-    passwords = [line.rstrip("\n") for line in sys.stdin if line.strip()]
+    if sys.stdin.isatty():
+        click.echo(
+            "Error: 'batch' reads passwords from stdin but no piped input was detected.\n"
+            "Usage example:  echo 'mypassword' | passcheck batch\n"
+            "             :  cat passwords.txt | passcheck batch",
+            err=True,
+        )
+        raise SystemExit(_ExitCode.ERROR)
+
+    passwords = [line.rstrip("\r\n") for line in sys.stdin if line.strip()]
     if not passwords:
         click.echo("Error: No passwords received on stdin.", err=True)
-        raise SystemExit(_EXIT_ERROR)
+        raise SystemExit(_ExitCode.ERROR)
 
     for i, pw in enumerate(passwords):
         _run_analysis(pw, show_password=show_password, output_json=output_json)
@@ -99,7 +113,7 @@ def _run_analysis(password: str, *, show_password: bool, output_json: bool) -> N
         analysis = _analyzer.analyze(password)
     except ValueError as exc:
         click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(_EXIT_ERROR) from exc
+        raise SystemExit(_ExitCode.ERROR) from exc
 
     if output_json:
         print_analysis_json(analysis)
@@ -118,7 +132,7 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
         except (KeyboardInterrupt, EOFError):
             if not output_json:
                 print("\n  Goodbye!\n")
-            raise SystemExit(_EXIT_OK)
+            raise SystemExit(_ExitCode.OK)
 
         if pw.lower() in {"quit", "exit", "q"}:
             if not output_json:
@@ -137,7 +151,7 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
             print()
 
 def _warn_insecure_flag() -> None:
-    """Print a warning to stderr when a password is passed via --password."""
+    """Emit a one-time warning to stderr when --password is used directly."""
     click.echo(
         "Warning: Passing a password via --password may expose it in your "
         "shell history. Consider using the interactive prompt instead.\n",
