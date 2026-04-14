@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import codecs
 import sys
+from collections.abc import Sequence
 
 from .models import CriterionResult, PasswordAnalysis
 
@@ -16,7 +17,7 @@ def score_bar(score: int, width: int = 20) -> str:
     """Return a text progress bar representing *score* (0–100)."""
     if isinstance(width, bool):
         raise TypeError(
-            f"score_bar() requires an integer width, got bool. "
+            "score_bar() requires an integer width, got bool. "
             "Pass a plain int such as score_bar(score, width=20)."
         )
     if not isinstance(width, int):
@@ -40,8 +41,8 @@ def score_bar(score: int, width: int = 20) -> str:
 
     return fill_char * filled + empty_char * (width - filled)
 
-def max_possible_score(criteria: list[CriterionResult]) -> int:
-    """Sum of all ``max_score`` values — useful for displaying x/100 breakdowns."""
+def max_possible_score(criteria: Sequence[CriterionResult]) -> int:
+    """Return the sum of all ``max_score`` values across *criteria*."""
     return sum(c.max_score for c in criteria)
 
 def criteria_summary(analysis: PasswordAnalysis) -> dict[str, object]:
