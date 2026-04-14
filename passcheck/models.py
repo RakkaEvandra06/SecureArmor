@@ -14,13 +14,15 @@ class CriterionResult:
     suggestion: str = ""
 
     def __post_init__(self) -> None:
-        if self.score < 0:
-            raise ValueError(
-                f"CriterionResult.score must be non-negative, got {self.score!r}."
-            )
+        # Validate in order from simplest to most derived so that the first
+        # meaningful constraint violation surfaces with a clear message.
         if self.max_score <= 0:
             raise ValueError(
                 f"CriterionResult.max_score must be positive, got {self.max_score!r}."
+            )
+        if self.score < 0:
+            raise ValueError(
+                f"CriterionResult.score must be non-negative, got {self.score!r}."
             )
         if self.score > self.max_score:
             raise ValueError(
