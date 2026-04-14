@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import getpass
+import json
 import sys
+from collections.abc import Iterator
 from enum import IntEnum
 
 import click
@@ -13,6 +15,8 @@ from .display import (
     print_banner,
     print_separator,
 )
+from .models import PasswordAnalysis
+from .scoring import criteria_summary
 
 # Module-level analyzer — stateless, so sharing one instance is safe.
 _analyzer = PasswordAnalyzer()
@@ -93,27 +97,70 @@ def batch(show_password: bool, output_json: bool) -> None:
         )
         raise SystemExit(_ExitCode.ERROR)
 
-    passwords = [line.rstrip("\r\n") for line in sys.stdin if line.strip()]
-    if not passwords:
+    if output_json:
+        _batch_json()
+    else:
+        _batch_text(show_password=show_password)
+
+# ---------------------------------------------------------------------------
+# Batch mode helpers
+# ---------------------------------------------------------------------------
+
+def _batch_json() -> None:
+    """Stream one JSON object per line (NDJSON) to stdout."""
+    found_any = False
+
+    for pw in _stdin_passwords():
+        found_any = True
+        result = criteria_summary(_analyze(pw))
+        # json.dumps never produces a newline inside a single-object dump, so
+        # the '\n' terminator is the only record separator needed.
+        print(json.dumps(result))
+
+    if not found_any:
         click.echo("Error: No passwords received on stdin.", err=True)
         raise SystemExit(_ExitCode.ERROR)
 
-    for i, pw in enumerate(passwords):
-        _run_analysis(pw, show_password=show_password, output_json=output_json)
-        if not output_json and i < len(passwords) - 1:
+def _batch_text(*, show_password: bool) -> None:
+    """Stream human-readable analysis blocks to stdout, one per password."""
+    found_any = False
+    first     = True
+
+    for pw in _stdin_passwords():
+        found_any = True
+        # Print a separator *before* every entry except the first, so no
+        # trailing separator is emitted after the last password.
+        if not first:
             print_separator()
+        _run_analysis(pw, show_password=show_password, output_json=False)
+        first = False
+
+    if not found_any:
+        click.echo("Error: No passwords received on stdin.", err=True)
+        raise SystemExit(_ExitCode.ERROR)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _run_analysis(password: str, *, show_password: bool, output_json: bool) -> None:
-    """Analyse *password* and dispatch to the appropriate renderer."""
+def _stdin_passwords() -> Iterator[str]:
+    """Yield non-blank passwords from stdin one line at a time."""
+    for line in sys.stdin:
+        pw = line.rstrip("\r\n")
+        if pw:
+            yield pw
+
+def _analyze(password: str) -> PasswordAnalysis:
+    """Run the analyser and return the result, or exit with an error message."""
     try:
-        analysis = _analyzer.analyze(password)
+        return _analyzer.analyze(password)
     except ValueError as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(_ExitCode.ERROR) from exc
+
+def _run_analysis(password: str, *, show_password: bool, output_json: bool) -> None:
+    """Analyse *password* and dispatch to the appropriate renderer."""
+    analysis = _analyze(password)
 
     if output_json:
         print_analysis_json(analysis)
