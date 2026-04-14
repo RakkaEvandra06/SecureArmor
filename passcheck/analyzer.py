@@ -21,6 +21,12 @@ from .constants import (
 )
 from .models import CriterionResult, PasswordAnalysis
 
+# ---------------------------------------------------------------------------
+# Internal sentinel — used when the entropy criterion is intentionally skipped
+# so the detail string is assembled in one place rather than inline.
+# ---------------------------------------------------------------------------
+_ENTROPY_SKIPPED_NOTE: str = "— skipped (repetition penalty already applied)"
+
 @dataclass(frozen=True)
 class _CharProfile:
     """Immutable character-level profile of a password."""
@@ -33,7 +39,7 @@ class _CharProfile:
     has_non_ascii: bool
 
     # Read-only frequency map: char → occurrence count.
-    char_counts: MappingProxyType  # MappingProxyType[str, int]
+    char_counts: MappingProxyType[str, int]
     _sorted_counts: tuple[tuple[str, int], ...] = field(
         init=False, repr=False, compare=False
     )
@@ -63,15 +69,15 @@ class _CharProfile:
 
         for c in pw:
             counts[c] += 1
-            if not has_upper     and c.isupper():         has_upper     = True
-            if not has_lower     and c.islower():         has_lower     = True
-            if not has_digit     and c.isdigit():         has_digit     = True
-            if not has_special   and c in SPECIAL_CHARS:  has_special   = True
-            if not has_non_ascii and ord(c) > 127:        has_non_ascii = True
+            if not has_upper     and c.isupper():        has_upper     = True
+            if not has_lower     and c.islower():        has_lower     = True
+            if not has_digit     and c.isdigit():        has_digit     = True
+            if not has_special   and c in SPECIAL_CHARS: has_special   = True
+            if not has_non_ascii and ord(c) > 127:       has_non_ascii = True
 
         # Freeze the frequency map before handing it to the dataclass.
         # _sorted_counts is derived automatically via __post_init__.
-        frozen_map = MappingProxyType(dict(counts))
+        frozen_map: MappingProxyType[str, int] = MappingProxyType(dict(counts))
 
         return cls(
             length        = len(pw),
@@ -279,12 +285,13 @@ class PasswordAnalyzer:
         )
 
     def _check_char_variety(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password uses at least 3 of the 4 character classes."""
+        """Award points if the password uses at least 3 of the 5 character classes."""
         classes = sum([
             profile.has_upper,
             profile.has_lower,
             profile.has_digit,
             profile.has_special,
+            profile.has_non_ascii,   # counts as a valid fifth class
         ])
         passed = classes >= 3
         w      = SCORE_WEIGHTS["char_variety"]
@@ -293,9 +300,10 @@ class PasswordAnalyzer:
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
-            detail     = f"Uses {classes}/4 character classes",
+            detail     = f"Uses {classes}/5 character classes",
             suggestion = (
-                "Mix uppercase, lowercase, digits, and special characters."
+                "Mix uppercase, lowercase, digits, special characters, "
+                "or non-ASCII characters."
                 if not passed else ""
             ),
         )
@@ -323,11 +331,15 @@ class PasswordAnalyzer:
     def _check_no_keyboard_pattern(self, pw: str) -> CriterionResult:
         """Deduct all points if the password contains a recognisable keyboard walk."""
         pw_lower = pw.lower()
-        found: list[str] = [
-            pattern
-            for pattern in KEYBOARD_PATTERNS
-            if pattern in pw_lower
-        ]
+
+        _DISPLAY_CAP: int = 3
+        found: list[str] = []
+        for pattern in KEYBOARD_PATTERNS:
+            if pattern in pw_lower:
+                found.append(pattern)
+                if len(found) >= _DISPLAY_CAP:
+                    break
+
         passed = not found
         w      = SCORE_WEIGHTS["no_keyboard_pattern"]
         return CriterionResult(
@@ -349,6 +361,13 @@ class PasswordAnalyzer:
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Deduct all points if a single character dominates the password."""
         w = SCORE_WEIGHTS["no_repeated_chars"]
+
+        if profile.length == 0:
+            raise RuntimeError(
+                "_check_no_repeated_chars() must not be called with an empty "
+                "profile; analyze() rejects empty passwords before any criterion "
+                "check runs."
+            )
 
         most_common_char, most_common_count = profile.most_common(1)[0]
         ratio  = most_common_count / profile.length
@@ -385,8 +404,8 @@ class PasswordAnalyzer:
                 score      = 0,
                 max_score  = w,
                 detail     = (
-                    f"Estimated entropy: {{entropy_bits:.1f}} bits "
-                    "— skipped (repetition penalty already applied)"
+                    f"Estimated entropy: {entropy_bits:.1f} bits "
+                    f"{_ENTROPY_SKIPPED_NOTE}"
                 ),
                 # No suggestion: the repetition criterion already advises the user.
                 suggestion = "",
