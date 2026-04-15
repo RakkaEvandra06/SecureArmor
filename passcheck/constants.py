@@ -92,8 +92,6 @@ if not (0.0 < REPEATED_CHAR_RATIO < 1.0):
 # ---------------------------------------------------------------------------
 # Strength band definitions  (score lower-bound -> label, colour code)
 # Sorted descending so the first match wins in a linear scan.
-# Guard: list must already be in descending order and must include a catch-all
-# entry at threshold 0 so every possible score maps to exactly one band.
 # ---------------------------------------------------------------------------
 STRENGTH_BANDS: list[tuple[int, str, str]] = [
     (80, "Very Strong", "bright_green"),
@@ -111,6 +109,13 @@ if STRENGTH_BANDS != _sorted_bands:
     )
 del _sorted_bands
 
+if STRENGTH_BANDS[-1][0] != 0:
+    raise ValueError(
+        "STRENGTH_BANDS must contain a catch-all entry with threshold 0 "
+        "as its last element so every possible score maps to exactly one band. "
+        f"Last entry found: {STRENGTH_BANDS[-1]}."
+    )
+
 # ---------------------------------------------------------------------------
 # Special characters recognised by the checker
 # ---------------------------------------------------------------------------
@@ -125,7 +130,6 @@ KEYBOARD_PATTERNS: tuple[str, ...] = (
     # Horizontal rows — left-to-right
     "qwerty", "qwertz", "azerty",
     # Horizontal rows — right-to-left (reverses)
-    # FIX: added "ytreza" (reverse of "azerty") to complete the symmetric set.
     "ytrewq", "ztrewq", "ytreza",
     # Middle row — left-to-right and right-to-left
     "asdfgh", "hgfdsa",
@@ -347,9 +351,11 @@ COMMON_PASSWORDS: frozenset[str] = frozenset({
 
 _mixed_case = [e for e in COMMON_PASSWORDS if e != e.lower()]
 if _mixed_case:
+    _sorted_bad = sorted(_mixed_case)
+    _suffix     = "..." if len(_sorted_bad) > 10 else ""
     raise ValueError(
         f"All COMMON_PASSWORDS entries must be lower-case. "
-        f"Offending entries: {sorted(_mixed_case)[:10]}..."
+        f"Offending entries: {_sorted_bad[:10]}{_suffix}"
     )
 del _mixed_case
 
