@@ -70,6 +70,15 @@ def check(password: str | None, show_password: bool, output_json: bool) -> None:
     if password is not None:
         _warn_insecure_flag()
         _run_analysis(password, show_password=show_password, output_json=output_json)
+    elif not sys.stdin.isatty():
+        click.echo(
+            "Error: stdin is not a TTY. Did you mean to use 'passcheck batch'?\n"
+            "Usage examples:\n"
+            "  echo 'mypassword' | passcheck batch\n"
+            "  cat passwords.txt  | passcheck batch",
+            err=True,
+        )
+        raise SystemExit(_ExitCode.ERROR)
     else:
         _interactive_loop(show_password=show_password, output_json=output_json)
 
@@ -145,7 +154,15 @@ def _batch_text(*, show_password: bool) -> None:
 
 def _stdin_passwords() -> Iterator[str]:
     """Yield non-blank passwords from stdin one line at a time."""
-    for line in sys.stdin:
+    for raw_line in sys.stdin.buffer:
+        try:
+            line = raw_line.decode("utf-8")
+        except UnicodeDecodeError:
+            click.echo(
+                "Warning: skipped a line that could not be decoded as UTF-8.",
+                err=True,
+            )
+            continue
         pw = line.rstrip("\r\n")
         if pw:
             yield pw
@@ -182,12 +199,18 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
             raise SystemExit(_ExitCode.OK)
 
         if pw.lower() in {"quit", "exit", "q"}:
-            if not output_json:
+            if output_json:
+                # Emit a structured sentinel so JSON consumers can detect a
+                # clean exit rather than treating the EOF as an error.
+                print(json.dumps({"event": "exit"}))
+            else:
                 print("\n  Goodbye!\n")
             break
 
         if not pw:
-            if not output_json:
+            if output_json:
+                print(json.dumps({"event": "empty_input"}))
+            else:
                 print("  Please enter a non-empty password.\n")
             continue
 
