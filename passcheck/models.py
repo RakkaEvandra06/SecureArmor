@@ -2,6 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# ---------------------------------------------------------------------------
+# Valid colour keys — kept here so models.py can validate strength_color
+# without importing display.py (which would create a circular dependency).
+# display.py owns the authoritative _COLOUR_MAP; this set must stay in sync.
+# ---------------------------------------------------------------------------
+_VALID_COLOUR_KEYS: frozenset[str] = frozenset({
+    "bright_green",
+    "green",
+    "yellow",
+    "red",
+    "bright_red",
+})
+
 @dataclass(frozen=True)
 class CriterionResult:
     """Immutable result for a single scoring criterion."""
@@ -11,11 +24,14 @@ class CriterionResult:
     score:      int
     max_score:  int
     detail:     str
-    suggestion: str = ""
+    suggestion: str  = ""
+    skipped:    bool = False
 
     def __post_init__(self) -> None:
-        # Validate in order from simplest to most derived so that the first
-        # meaningful constraint violation surfaces with a clear message.
+        # ------------------------------------------------------------------ #
+        # Validate in order from simplest to most derived so that the first  #
+        # meaningful constraint violation surfaces with a clear message.     #
+        # ------------------------------------------------------------------ #
         if self.max_score <= 0:
             raise ValueError(
                 f"CriterionResult.max_score must be positive, got {self.max_score!r}."
@@ -34,6 +50,24 @@ class CriterionResult:
                 "A passed CriterionResult must not carry a non-empty suggestion."
             )
 
+        # ------------------------------------------------------------------ #
+        # Skipped-specific invariants                                          #
+        # ------------------------------------------------------------------ #
+        if self.skipped:
+            if self.passed:
+                raise ValueError(
+                    "A skipped CriterionResult cannot also be marked as passed."
+                )
+            if self.score != 0:
+                raise ValueError(
+                    f"A skipped CriterionResult must have score=0, got {self.score!r}."
+                )
+            if self.suggestion:
+                raise ValueError(
+                    "A skipped CriterionResult must not carry a non-empty suggestion "
+                    "(the criterion that triggered the skip already advises the user)."
+                )
+
 @dataclass(frozen=True)
 class PasswordAnalysis:
     """Immutable aggregated analysis result for one password."""
@@ -47,12 +81,23 @@ class PasswordAnalysis:
     entropy_bits: float                        = 0.0
     suggestions:  tuple[str, ...]             = field(default_factory=tuple)
 
+    def __post_init__(self) -> None:
+        if not (0 <= self.score <= 100):
+            raise ValueError(
+                f"PasswordAnalysis.score must be in [0, 100], got {self.score!r}."
+            )
+        if self.strength_color not in _VALID_COLOUR_KEYS:
+            raise ValueError(
+                f"PasswordAnalysis.strength_color {self.strength_color!r} is not a "
+                f"recognised colour key. Valid keys: {sorted(_VALID_COLOUR_KEYS)}."
+            )
+
     @property
     def passed_count(self) -> int:
-        """Number of criteria the password actively satisfied (not skipped)."""
+        """Number of criteria the password actively satisfied."""
         return sum(1 for c in self.criteria if c.passed)
 
     @property
     def total_criteria(self) -> int:
-        """Total number of criteria that were evaluated."""
-        return len(self.criteria)
+        """Number of criteria that were actually evaluated (skipped excluded)."""
+        return sum(1 for c in self.criteria if not c.skipped)
