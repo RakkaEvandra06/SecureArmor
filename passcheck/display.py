@@ -15,12 +15,14 @@ from .scoring import criteria_summary, score_bar
 # Layout constants
 # ---------------------------------------------------------------------------
 
-_BANNER_WIDTH:    int = 60
-_SEPARATOR_WIDTH: int = 64
-_CRITERION_NAME_WIDTH: int = 26
+_BANNER_WIDTH:          int = 60
+_SEPARATOR_WIDTH:       int = 64
+_CRITERION_NAME_WIDTH:  int = 26
 
 # ---------------------------------------------------------------------------
 # Internal colour map
+# Maps the colour keys used throughout the codebase to ANSI escape sequences.
+# All valid keys are declared here; passing an unknown key raises ValueError.
 # ---------------------------------------------------------------------------
 
 _COLOUR_MAP: dict[str, str] = {
@@ -30,6 +32,21 @@ _COLOUR_MAP: dict[str, str] = {
     "red":          Fore.RED,
     "bright_red":   Fore.LIGHTRED_EX,
 }
+
+from .constants import STRENGTH_BANDS as _STRENGTH_BANDS
+
+_invalid_band_colours: list[str] = [
+    colour
+    for _, _, colour in _STRENGTH_BANDS
+    if colour not in _COLOUR_MAP
+]
+if _invalid_band_colours:
+    raise ValueError(
+        f"STRENGTH_BANDS contains colour key(s) not present in _COLOUR_MAP: "
+        f"{_invalid_band_colours}. "
+        f"Valid keys are: {sorted(_COLOUR_MAP)}."
+    )
+del _STRENGTH_BANDS, _invalid_band_colours
 
 def _coloured(text: str, colour_key: str) -> str:
     """Wrap *text* in the ANSI escape codes for *colour_key*."""
@@ -57,12 +74,12 @@ def _visible_len(s: str) -> int:
     return len(_ANSI_ESC.sub("", s))
 
 def _ljust_ansi(s: str, width: int) -> str:
-    """Left-justify *s* to *width* **visible** characters, preserving ANSI codes."""
+    """Left-justify *s* to *width* visible characters, preserving ANSI codes."""
     pad = width - _visible_len(s)
     return s + " " * max(pad, 0)
 
 def _rjust_ansi(s: str, width: int) -> str:
-    """Right-justify *s* to *width* **visible** characters, preserving ANSI codes."""
+    """Right-justify *s* to *width* visible characters, preserving ANSI codes."""
     pad = width - _visible_len(s)
     return " " * max(pad, 0) + s
 
@@ -118,9 +135,11 @@ def _print_header(analysis: PasswordAnalysis, *, show_password: bool) -> None:
     )
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
-    color = analysis.strength_color
-    score = analysis.score
-    bar   = score_bar(score, width=24)
+    color   = analysis.strength_color
+    score   = analysis.score
+    bar     = score_bar(score, width=24)
+    raw_sum = sum(c.score for c in analysis.criteria)
+
     print()
     print(
         f"  {_coloured(bar, color)}"
@@ -133,9 +152,16 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
             f"   Criteria: {analysis.passed_count}/{analysis.total_criteria} passed"
         )
     )
+    if raw_sum > 100:
+        print(
+            _dim(
+                f"  (Criteria total {raw_sum} pts — score is capped at 100)"
+            )
+        )
     print()
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
+    """Render the per-criterion results table."""
     col = _CRITERION_NAME_WIDTH
     header_criterion = _ljust_ansi(_bold("Criterion"), col)
     header_score     = _rjust_ansi(_bold("Score"), 8)
@@ -143,10 +169,18 @@ def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     print(_dim("  " + "─" * (_SEPARATOR_WIDTH - 2)))
 
     for c in analysis.criteria:
-        icon       = _coloured("✔", "green") if c.passed else _coloured("✘", "red")
-        score_cell = _coloured(f"+{c.score}", "green") if c.passed else _dim(f"+0/{c.max_score}")
-        name_col   = _ljust_ansi(c.name[:col], col)
-        score_col  = _rjust_ansi(score_cell, 8)
+        if c.skipped:
+            icon       = _coloured("⊘", "yellow")
+            score_cell = _dim("   —   ")
+        elif c.passed:
+            icon       = _coloured("✔", "green")
+            score_cell = _coloured(f"+{c.score}", "green")
+        else:
+            icon       = _coloured("✘", "red")
+            score_cell = _dim(f"+0/{c.max_score}")
+
+        name_col  = _ljust_ansi(c.name[:col], col)
+        score_col = _rjust_ansi(score_cell, 8)
         print(f"  {icon}   {name_col}  {score_col}  {_dim(c.detail)}")
 
     print()
