@@ -49,6 +49,12 @@ class CriterionResult:
             raise ValueError(
                 "A passed CriterionResult must not carry a non-empty suggestion."
             )
+        if self.passed and self.score == 0:
+            raise ValueError(
+                "A passed CriterionResult must have a positive score; "
+                f"got score=0 with max_score={self.max_score}. "
+                "If the criterion genuinely contributes nothing, mark it as skipped."
+            )
 
         # ------------------------------------------------------------------ #
         # Skipped-specific invariants                                          #
