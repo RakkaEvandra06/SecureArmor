@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-import codecs
-import sys
 from collections.abc import Sequence
 
 from .models import CriterionResult, PasswordAnalysis
-
-def _is_utf_encoding(encoding: str) -> bool:
-    """Return ``True`` if *encoding* resolves to a UTF variant via the codec registry."""
-    try:
-        return codecs.lookup(encoding).name in ("utf-8", "utf-8-sig", "utf-16", "utf-32")
-    except LookupError:
-        return False
+from .utils import is_utf_terminal as _is_utf_terminal  # FIX (Bug 2): centralised
 
 def score_bar(score: int, width: int = 20) -> str:
     """Return a text progress bar representing *score* (0–100)."""
@@ -33,8 +25,7 @@ def score_bar(score: int, width: int = 20) -> str:
     score  = max(0, min(100, score))
     filled = min(width, round(score / 100 * width))
 
-    encoding = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
-    if _is_utf_encoding(encoding):
+    if _is_utf_terminal():
         fill_char, empty_char = "█", "░"
     else:
         fill_char, empty_char = "#", "-"
@@ -58,6 +49,7 @@ def criteria_summary(analysis: PasswordAnalysis) -> dict[str, object]:
             {
                 "name":      c.name,
                 "passed":    c.passed,
+                "skipped":   c.skipped,
                 "score":     c.score,
                 "max_score": c.max_score,
                 "detail":    c.detail,
