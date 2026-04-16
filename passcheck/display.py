@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 
 import colorama
 from colorama import Fore, Style
@@ -10,6 +11,7 @@ colorama.init(autoreset=True)
 
 from .models import PasswordAnalysis
 from .scoring import criteria_summary, score_bar
+from .utils import is_utf_terminal as _is_utf_terminal  # FIX (Bug 2): centralised
 
 # ---------------------------------------------------------------------------
 # Layout constants
@@ -66,6 +68,10 @@ def _dim(text: str) -> str:
     """Wrap *text* in the ANSI dim escape code."""
     return f"{Style.DIM}{text}{Style.RESET_ALL}"
 
+# ---------------------------------------------------------------------------
+# ANSI-aware string helpers
+# ---------------------------------------------------------------------------
+
 # Matches any ANSI CSI escape sequence (colours, bold, dim, reset, …).
 _ANSI_ESC: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -102,19 +108,25 @@ def print_analysis_json(analysis: PasswordAnalysis) -> None:
 
 def print_banner() -> None:
     """Print the PassCheck welcome banner to stdout."""
+    if _is_utf_terminal():
+        tl, tr, bl, br, h, v = "╔", "╗", "╚", "╝", "═", "║"
+    else:
+        tl, tr, bl, br, h, v = "+", "+", "+", "+", "-", "|"
+
     print()
-    print(_coloured("╔" + "═" * _BANNER_WIDTH + "╗", "bright_green"))
+    print(_coloured(tl + h * _BANNER_WIDTH + tr, "bright_green"))
     print(
-        _coloured("║", "bright_green")
+        _coloured(v, "bright_green")
         + _bold("  PassCheck — Password Strength Analyser  ".center(_BANNER_WIDTH))
-        + _coloured("║", "bright_green")
+        + _coloured(v, "bright_green")
     )
-    print(_coloured("╚" + "═" * _BANNER_WIDTH + "╝", "bright_green"))
+    print(_coloured(bl + h * _BANNER_WIDTH + br, "bright_green"))
     print(_dim("  Type a password to analyse it, or 'quit'/'exit' to leave.\n"))
 
 def print_separator() -> None:
     """Print a horizontal rule between analysis blocks."""
-    print(_dim("─" * _SEPARATOR_WIDTH))
+    char = "─" if _is_utf_terminal() else "-"
+    print(_dim(char * _SEPARATOR_WIDTH))
 
 # ---------------------------------------------------------------------------
 # Private rendering helpers
@@ -162,21 +174,24 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     """Render the per-criterion results table."""
+    utf = _is_utf_terminal()
+    rule_char = "─" if utf else "-"
+
     col = _CRITERION_NAME_WIDTH
     header_criterion = _ljust_ansi(_bold("Criterion"), col)
     header_score     = _rjust_ansi(_bold("Score"), 8)
     print(f"  {'':2}  {header_criterion}  {header_score}  {_dim('Detail')}")
-    print(_dim("  " + "─" * (_SEPARATOR_WIDTH - 2)))
+    print(_dim("  " + rule_char * (_SEPARATOR_WIDTH - 2)))
 
     for c in analysis.criteria:
         if c.skipped:
-            icon       = _coloured("⊘", "yellow")
+            icon       = _coloured("⊘" if utf else "~", "yellow")
             score_cell = _dim("   —   ")
         elif c.passed:
-            icon       = _coloured("✔", "green")
+            icon       = _coloured("✔" if utf else "+", "green")
             score_cell = _coloured(f"+{c.score}", "green")
         else:
-            icon       = _coloured("✘", "red")
+            icon       = _coloured("✘" if utf else "x", "red")
             score_cell = _dim(f"+0/{c.max_score}")
 
         name_col  = _ljust_ansi(c.name[:col], col)
