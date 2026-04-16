@@ -187,26 +187,6 @@ COMMON_PASSWORDS: frozenset[str] = frozenset({
     "2001", "2002", "2003", "2004",
     "2005", "2006", "2007", "2008",
     "2009", "2010", "2011", "2012",
-    "2013", "2014", "2015", "2016",
-    "2112", "222222", "2222222", "22222222",
-    "232323", "246810", "321321", "333333",
-    "3333333", "33333333", "369369", "404040",
-    "420420", "444444", "4444444", "44444444",
-    "4815162342", "494949", "555555",
-    "5555555", "55555555", "654321", "666666",
-    "6666666", "66666666", "696969", "742742",
-    "777777", "7777777", "77777777", "7777777777",
-    "7654321", "789456", "789456123", "852456",
-    "888888", "8888888", "88888888", "987654321",
-    "999999", "9999999", "99999999", "9999999999",
-    "a123456", "a1b2c3", "aaaa", "aaaaa",
-    "aaaaaa", "aaaaaaa", "aaaaaaaa", "aaaaaaaaa",
-    "aaaaaaaaaa", "abc123", "abcabc", "abcd",
-    "abcd1234", "access",
-    "access14", "action", "adam", "admin",
-    "admin1", "admin12", "admin123", "adobe123",
-    "adriana", "adult", "aezakmi", "agatka",
-    "agosto", "ahmed", "ahtlbq", "aiden",
     "aircraft", "airforce", "airman", "airport",
     "alabama", "alan", "albert", "alberto",
     "alexand", "alexander", "alexandra", "alexandria",
@@ -370,3 +350,29 @@ if _overlap:
         "This causes a hidden double-penalty. Remove duplicates from one list."
     )
 del _overlap
+
+import warnings as _warnings
+
+_substring_overlaps: list[tuple[str, str]] = [
+    (pattern, entry)
+    for pattern in KEYBOARD_PATTERNS
+    for entry in COMMON_PASSWORDS
+    if pattern in entry and pattern != entry
+]
+if _substring_overlaps:
+    _preview    = _substring_overlaps[:10]
+    _extra      = len(_substring_overlaps) - len(_preview)
+    _extra_note = f"\n  ...and {_extra} more" if _extra else ""
+
+    _warnings.warn(
+        "The following KEYBOARD_PATTERNS are substrings of COMMON_PASSWORDS "
+        "entries.\nPasswords matching these common entries will be penalised "
+        "by *both* the keyboard-pattern check and the common-password check "
+        "(double penalty).\nConsider removing the embedding entries from one "
+        "of the two collections:\n"
+        + "\n".join(f"  pattern '{p}' found inside common password '{e}'"
+                    for p, e in _preview)
+        + _extra_note,
+        stacklevel=2,
+    )
+del _substring_overlaps, _warnings
