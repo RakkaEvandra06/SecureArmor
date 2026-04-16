@@ -27,9 +27,11 @@ SecureArmor/
 │   ├── analyzer.py      
 │   ├── cli.py           
 │   ├── constants.py     
-│   ├── display.py       
+│   ├── display.py  
+│   ├── main.py     
 │   ├── models.py        
-│   └── scoring.py       
+│   ├── scoring.py 
+│   └── utils.py      
 ├── tests/
 │   └── test_analyzer.py   
 └── README.md
