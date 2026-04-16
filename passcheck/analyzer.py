@@ -25,7 +25,13 @@ from .models import CriterionResult, PasswordAnalysis
 # Internal sentinel — used when the entropy criterion is intentionally skipped
 # so the detail string is assembled in one place rather than inline.
 # ---------------------------------------------------------------------------
-_ENTROPY_SKIPPED_NOTE: str = "— skipped (repetition penalty already applied)"
+_ENTROPY_SKIPPED_NOTE: str = "- skipped (repetition penalty already applied)"
+
+# ---------------------------------------------------------------------------
+# Maximum number of distinct keyboard patterns shown in the failure detail.
+# Declared at module level so it is easy to tune without touching method bodies.
+# ---------------------------------------------------------------------------
+_KEYBOARD_DISPLAY_CAP: int = 3
 
 @dataclass(frozen=True)
 class _CharProfile:
@@ -37,11 +43,11 @@ class _CharProfile:
     has_digit:     bool
     has_special:   bool
     has_non_ascii: bool
-
-    # Read-only frequency map: char → occurrence count.
     char_counts: MappingProxyType[str, int]
+
     _sorted_counts: tuple[tuple[str, int], ...] = field(
-        init=False, repr=False, compare=False
+        init=False, repr=False, compare=False,
+        default=(),
     )
 
     def __post_init__(self) -> None:
@@ -136,10 +142,13 @@ class PasswordAnalyzer:
             entropy_result,
         ]
 
-        score            = min(100, sum(c.score for c in criteria_list))
-        label, color     = self._strength_band(score)
+        score        = min(100, sum(c.score for c in criteria_list))
+        label, color = self._strength_band(score)
+
         suggestions_list = [
-            c.suggestion for c in criteria_list if not c.passed and c.suggestion
+            c.suggestion
+            for c in criteria_list
+            if not c.skipped and not c.passed and c.suggestion
         ]
 
         return PasswordAnalysis(
@@ -332,23 +341,24 @@ class PasswordAnalyzer:
         """Deduct all points if the password contains a recognisable keyboard walk."""
         pw_lower = pw.lower()
 
-        _DISPLAY_CAP: int = 3
         found: list[str] = []
         for pattern in KEYBOARD_PATTERNS:
             if pattern in pw_lower:
                 found.append(pattern)
-                if len(found) >= _DISPLAY_CAP:
-                    break
 
-        passed = not found
-        w      = SCORE_WEIGHTS["no_keyboard_pattern"]
+        passed        = not found
+        display_found = found[:_KEYBOARD_DISPLAY_CAP]
+        extra         = len(found) - len(display_found)
+        suffix        = f" (+{extra} more)" if extra else ""
+
+        w = SCORE_WEIGHTS["no_keyboard_pattern"]
         return CriterionResult(
             name       = "No keyboard patterns",
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
             detail     = (
-                f"Keyboard patterns detected: {', '.join(found)}"
+                f"Keyboard patterns detected: {', '.join(display_found)}{suffix}"
                 if not passed
                 else "No obvious keyboard patterns detected"
             ),
@@ -399,11 +409,12 @@ class PasswordAnalyzer:
 
         if not repetition_passed:
             return CriterionResult(
-                name       = "Entropy",
-                passed     = False,
-                score      = 0,
-                max_score  = w,
-                detail     = (
+                name    = "Entropy",
+                passed  = False,
+                skipped = True,     # criterion was not evaluated — mark explicitly
+                score   = 0,
+                max_score = w,
+                detail  = (
                     f"Estimated entropy: {entropy_bits:.1f} bits "
                     f"{_ENTROPY_SKIPPED_NOTE}"
                 ),
