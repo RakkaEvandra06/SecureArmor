@@ -218,7 +218,6 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
 
         if not output_json:
             print_separator()
-            print()
 
 def _warn_insecure_flag() -> None:
     """Emit a one-time warning to stderr when --password is used directly."""
