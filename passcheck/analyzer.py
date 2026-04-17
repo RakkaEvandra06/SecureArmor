@@ -9,6 +9,7 @@ from .constants import (
     COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
     KEYBOARD_PATTERNS,
+    KEYBOARD_PATTERN_MIN_LEN,
     LENGTH_EXCELLENT,
     LENGTH_GOOD,
     LENGTH_MAXIMUM,
@@ -341,10 +342,11 @@ class PasswordAnalyzer:
         """Deduct all points if the password contains a recognisable keyboard walk."""
         pw_lower = pw.lower()
 
-        found: list[str] = []
-        for pattern in KEYBOARD_PATTERNS:
-            if pattern in pw_lower:
-                found.append(pattern)
+        found: list[str] = [
+            pattern
+            for pattern in KEYBOARD_PATTERNS
+            if len(pattern) >= KEYBOARD_PATTERN_MIN_LEN and pattern in pw_lower
+        ]
 
         passed        = not found
         display_found = found[:_KEYBOARD_DISPLAY_CAP]
@@ -370,14 +372,12 @@ class PasswordAnalyzer:
 
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Deduct all points if a single character dominates the password."""
-        w = SCORE_WEIGHTS["no_repeated_chars"]
+        assert profile.length > 0, (
+            "_check_no_repeated_chars() reached with an empty profile — "
+            "analyze() must reject empty passwords before any criterion runs."
+        )
 
-        if profile.length == 0:
-            raise RuntimeError(
-                "_check_no_repeated_chars() must not be called with an empty "
-                "profile; analyze() rejects empty passwords before any criterion "
-                "check runs."
-            )
+        w = SCORE_WEIGHTS["no_repeated_chars"]
 
         most_common_char, most_common_count = profile.most_common(1)[0]
         ratio  = most_common_count / profile.length
