@@ -5,7 +5,7 @@
 <div align="center">
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![License](https://img.shields.io/github/license/RakkaEvandra06/SecureArmor)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Security](https://img.shields.io/badge/security-focused-critical)
 ![Status](https://img.shields.io/badge/status-stable-brightgreen)
 
@@ -34,6 +34,7 @@ SecureArmor/
 │   └── utils.py      
 ├── tests/
 │   └── test_analyzer.py   
+└── LICENSE.txt
 └── README.md
 ```
 
@@ -70,7 +71,7 @@ python3 -c "from passcheck.cli import main; main()" check
 
 ## 🚀 Usage
 
-### Single password via flag (⚠ insecure — stored in shell history)
+### Single password via flag (⚠ insecure stored in shell history)
 
 ```bash
 passcheck check -p "MyP@ssw0rd!"
@@ -111,7 +112,7 @@ passcheck batch --help
 
 ## Development
 
-No external test runner required — the test file uses stdlib `unittest`:
+No external test runner required the test file uses stdlib `unittest`:
 ```bash
 python3 tests/test_analyzer.py
 ```
