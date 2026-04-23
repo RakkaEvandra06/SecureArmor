@@ -9,7 +9,6 @@ from .constants import (
     COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
     KEYBOARD_PATTERNS,
-    KEYBOARD_PATTERN_MIN_LEN,
     LENGTH_EXCELLENT,
     LENGTH_GOOD,
     LENGTH_MAXIMUM,
@@ -128,6 +127,12 @@ class PasswordAnalyzer:
             entropy_bits, repetition_passed=repetition_result.passed
         )
 
+        common_result   = self._check_no_common_password(password)
+        keyboard_result = self._check_no_keyboard_pattern(
+            password,
+            skip=not common_result.passed,
+        )
+
         criteria_list: list[CriterionResult] = [
             self._check_length_minimum(profile),
             self._check_length_good(profile),
@@ -137,8 +142,8 @@ class PasswordAnalyzer:
             self._check_has_digit(profile),
             self._check_has_special(profile),
             self._check_char_variety(profile),
-            self._check_no_common_password(password),
-            self._check_no_keyboard_pattern(password),
+            common_result,
+            keyboard_result,
             repetition_result,
             entropy_result,
         ]
@@ -296,13 +301,13 @@ class PasswordAnalyzer:
 
     def _check_char_variety(self, profile: _CharProfile) -> CriterionResult:
         """Award points if the password uses at least 3 of the 5 character classes."""
-        classes = sum([
+        classes = sum((
             profile.has_upper,
             profile.has_lower,
             profile.has_digit,
             profile.has_special,
             profile.has_non_ascii,   # counts as a valid fifth class
-        ])
+        ))
         passed = classes >= 3
         w      = SCORE_WEIGHTS["char_variety"]
         return CriterionResult(
@@ -338,14 +343,32 @@ class PasswordAnalyzer:
             ),
         )
 
-    def _check_no_keyboard_pattern(self, pw: str) -> CriterionResult:
+    def _check_no_keyboard_pattern(
+        self,
+        pw: str,
+        *,
+        skip: bool = False,
+    ) -> CriterionResult:
         """Deduct all points if the password contains a recognisable keyboard walk."""
+        w = SCORE_WEIGHTS["no_keyboard_pattern"]
+
+        if skip:
+            return CriterionResult(
+                name       = "No keyboard patterns",
+                passed     = False,
+                skipped    = True,
+                score      = 0,
+                max_score  = w,
+                detail     = "- skipped (common password already detected)",
+                suggestion = "",
+            )
+
         pw_lower = pw.lower()
 
         found: list[str] = [
             pattern
             for pattern in KEYBOARD_PATTERNS
-            if len(pattern) >= KEYBOARD_PATTERN_MIN_LEN and pattern in pw_lower
+            if pattern in pw_lower
         ]
 
         passed        = not found
@@ -353,7 +376,6 @@ class PasswordAnalyzer:
         extra         = len(found) - len(display_found)
         suffix        = f" (+{extra} more)" if extra else ""
 
-        w = SCORE_WEIGHTS["no_keyboard_pattern"]
         return CriterionResult(
             name       = "No keyboard patterns",
             passed     = passed,
@@ -372,10 +394,11 @@ class PasswordAnalyzer:
 
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Deduct all points if a single character dominates the password."""
-        assert profile.length > 0, (
-            "_check_no_repeated_chars() reached with an empty profile — "
-            "analyze() must reject empty passwords before any criterion runs."
-        )
+        if profile.length == 0:
+            raise RuntimeError(
+                "_check_no_repeated_chars() reached with an empty profile — "
+                "analyze() must reject empty passwords before any criterion runs."
+            )
 
         w = SCORE_WEIGHTS["no_repeated_chars"]
 
