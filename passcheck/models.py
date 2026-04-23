@@ -2,18 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# ---------------------------------------------------------------------------
-# Valid colour keys — kept here so models.py can validate strength_color
-# without importing display.py (which would create a circular dependency).
-# display.py owns the authoritative _COLOUR_MAP; this set must stay in sync.
-# ---------------------------------------------------------------------------
-_VALID_COLOUR_KEYS: frozenset[str] = frozenset({
-    "bright_green",
-    "green",
-    "yellow",
-    "red",
-    "bright_red",
-})
+from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 
 @dataclass(frozen=True)
 class CriterionResult:
@@ -56,6 +45,14 @@ class CriterionResult:
                 "If the criterion genuinely contributes nothing, mark it as skipped."
             )
 
+        if not self.passed and not self.skipped and self.score != 0:
+            raise ValueError(
+                f"A failed (non-passed, non-skipped) CriterionResult must have "
+                f"score=0, got score={self.score!r}. "
+                "Use skipped=True for unevaluated criteria, or passed=True if "
+                "the criterion was actually satisfied."
+            )
+
         # ------------------------------------------------------------------ #
         # Skipped-specific invariants                                          #
         # ------------------------------------------------------------------ #
@@ -83,9 +80,9 @@ class PasswordAnalysis:
     strength_label:  str
     strength_color:  str
 
-    criteria:     tuple[CriterionResult, ...] = field(default_factory=tuple)
+    criteria:     tuple[CriterionResult, ...] = field(default=())
     entropy_bits: float                        = 0.0
-    suggestions:  tuple[str, ...]             = field(default_factory=tuple)
+    suggestions:  tuple[str, ...]             = field(default=())
 
     def __post_init__(self) -> None:
         if not (0 <= self.score <= 100):
