@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import getpass
 import json
 import sys
@@ -28,6 +29,14 @@ _analyzer = PasswordAnalyzer()
 class _ExitCode(IntEnum):
     OK    = 0
     ERROR = 1
+
+# ---------------------------------------------------------------------------
+# JSON output helper
+# ---------------------------------------------------------------------------
+
+def _emit_json(obj: dict) -> None:  # type: ignore[type-arg]
+    """Write *obj* as a single compact JSON line (NDJSON-compatible)."""
+    print(json.dumps(obj))
 
 # ---------------------------------------------------------------------------
 # CLI root
@@ -119,12 +128,10 @@ def _batch_json() -> None:
     """Stream one JSON object per line (NDJSON) to stdout."""
     found_any = False
 
-    for pw in _stdin_passwords():
+    for pw in _stdin_passwords(output_json=True):
         found_any = True
         result = criteria_summary(_analyze(pw))
-        # json.dumps never produces a newline inside a single-object dump, so
-        # the '\n' terminator is the only record separator needed.
-        print(json.dumps(result))
+        _emit_json(result)
 
     if not found_any:
         click.echo("Error: No passwords received on stdin.", err=True)
@@ -135,7 +142,7 @@ def _batch_text(*, show_password: bool) -> None:
     found_any = False
     first     = True
 
-    for pw in _stdin_passwords():
+    for pw in _stdin_passwords(output_json=False):
         found_any = True
         # Print a separator *before* every entry except the first, so no
         # trailing separator is emitted after the last password.
@@ -152,16 +159,22 @@ def _batch_text(*, show_password: bool) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _stdin_passwords() -> Iterator[str]:
+def _stdin_passwords(*, output_json: bool = False) -> Iterator[str]:
     """Yield non-blank passwords from stdin one line at a time."""
     for raw_line in sys.stdin.buffer:
         try:
             line = raw_line.decode("utf-8")
         except UnicodeDecodeError:
-            click.echo(
-                "Warning: skipped a line that could not be decoded as UTF-8.",
-                err=True,
-            )
+            if output_json:
+                _emit_json({
+                    "event":  "decode_error",
+                    "detail": "A line could not be decoded as UTF-8 and was skipped.",
+                })
+            else:
+                click.echo(
+                    "Warning: skipped a line that could not be decoded as UTF-8.",
+                    err=True,
+                )
             continue
         pw = line.rstrip("\r\n")
         if pw:
@@ -202,14 +215,14 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
             if output_json:
                 # Emit a structured sentinel so JSON consumers can detect a
                 # clean exit rather than treating the EOF as an error.
-                print(json.dumps({"event": "exit"}))
+                _emit_json({"event": "exit"})
             else:
                 print("\n  Goodbye!\n")
             break
 
         if not pw:
             if output_json:
-                print(json.dumps({"event": "empty_input"}))
+                _emit_json({"event": "empty_input"})
             else:
                 print("  Please enter a non-empty password.\n")
             continue
@@ -219,6 +232,7 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
         if not output_json:
             print_separator()
 
+@functools.lru_cache(maxsize=None)
 def _warn_insecure_flag() -> None:
     """Emit a one-time warning to stderr when --password is used directly."""
     click.echo(
