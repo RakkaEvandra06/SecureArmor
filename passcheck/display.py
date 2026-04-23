@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
-
 import colorama
 from colorama import Fore, Style
 
@@ -11,7 +9,7 @@ colorama.init(autoreset=True)
 
 from .models import PasswordAnalysis
 from .scoring import criteria_summary, score_bar
-from .utils import is_utf_terminal as _is_utf_terminal  # FIX (Bug 2): centralised
+from .utils import is_utf_terminal as _is_utf_terminal
 
 # ---------------------------------------------------------------------------
 # Layout constants
@@ -23,8 +21,6 @@ _CRITERION_NAME_WIDTH:  int = 26
 
 # ---------------------------------------------------------------------------
 # Internal colour map
-# Maps the colour keys used throughout the codebase to ANSI escape sequences.
-# All valid keys are declared here; passing an unknown key raises ValueError.
 # ---------------------------------------------------------------------------
 
 _COLOUR_MAP: dict[str, str] = {
@@ -35,20 +31,17 @@ _COLOUR_MAP: dict[str, str] = {
     "bright_red":   Fore.LIGHTRED_EX,
 }
 
-from .constants import STRENGTH_BANDS as _STRENGTH_BANDS
+from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 
-_invalid_band_colours: list[str] = [
-    colour
-    for _, _, colour in _STRENGTH_BANDS
-    if colour not in _COLOUR_MAP
-]
-if _invalid_band_colours:
+_missing_map_keys: list[str] = sorted(_VALID_COLOUR_KEYS - frozenset(_COLOUR_MAP))
+if _missing_map_keys:
     raise ValueError(
-        f"STRENGTH_BANDS contains colour key(s) not present in _COLOUR_MAP: "
-        f"{_invalid_band_colours}. "
-        f"Valid keys are: {sorted(_COLOUR_MAP)}."
+        f"_COLOUR_MAP is missing ANSI entries for colour key(s) declared in "
+        f"VALID_COLOUR_KEYS: {_missing_map_keys}. "
+        "Add the missing keys to _COLOUR_MAP or update VALID_COLOUR_KEYS "
+        "in constants.py."
     )
-del _STRENGTH_BANDS, _invalid_band_colours
+del _VALID_COLOUR_KEYS, _missing_map_keys
 
 def _coloured(text: str, colour_key: str) -> str:
     """Wrap *text* in the ANSI escape codes for *colour_key*."""
@@ -103,8 +96,8 @@ def print_analysis(analysis: PasswordAnalysis, *, show_password: bool = False) -
     print()
 
 def print_analysis_json(analysis: PasswordAnalysis) -> None:
-    """Render *analysis* as indented JSON to stdout."""
-    print(json.dumps(criteria_summary(analysis), indent=2))
+    """Render *analysis* as a compact JSON line (NDJSON-compatible) to stdout."""
+    print(json.dumps(criteria_summary(analysis)))
 
 def print_banner() -> None:
     """Print the PassCheck welcome banner to stdout."""
@@ -192,7 +185,7 @@ def _print_criteria_table(analysis: PasswordAnalysis) -> None:
             score_cell = _coloured(f"+{c.score}", "green")
         else:
             icon       = _coloured("✘" if utf else "x", "red")
-            score_cell = _dim(f"+0/{c.max_score}")
+            score_cell = _dim(f"+{c.score}/{c.max_score}")
 
         name_col  = _ljust_ansi(c.name[:col], col)
         score_col = _rjust_ansi(score_cell, 8)
