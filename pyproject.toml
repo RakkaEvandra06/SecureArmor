@@ -191,10 +191,6 @@ show_missing = true
 skip_covered = false
 fail_under   = 80
 
-[tool.build-system]
-requires      = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
 # Optional: Add bandit security linter configuration
 [tool.bandit]
 exclude_dirs = ["tests", "docs"]
