@@ -10,6 +10,7 @@ __all__ = [
     "REPEATED_CHAR_RATIO",
     "SHANNON_WEIGHT",
     "STRENGTH_BANDS",
+    "VALID_COLOUR_KEYS",
     "SPECIAL_CHARS",
     "KEYBOARD_PATTERNS",
     "KEYBOARD_PATTERN_MIN_LEN",
@@ -115,6 +116,8 @@ if STRENGTH_BANDS[-1][0] != 0:
         "as its last element so every possible score maps to exactly one band. "
         f"Last entry found: {STRENGTH_BANDS[-1]}."
     )
+
+VALID_COLOUR_KEYS: frozenset[str] = frozenset(colour for _, _, colour in STRENGTH_BANDS)
 
 # ---------------------------------------------------------------------------
 # Special characters recognised by the checker
