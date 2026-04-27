@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -20,18 +21,41 @@ from .constants import (
     STRENGTH_BANDS,
 )
 from .models import CriterionResult, PasswordAnalysis
+from .utils import masked_password as _masked_password
 
 # ---------------------------------------------------------------------------
-# Internal sentinel — used when the entropy criterion is intentionally skipped
-# so the detail string is assembled in one place rather than inline.
+# Internal sentinel used in the entropy skipped-detail string.
 # ---------------------------------------------------------------------------
 _ENTROPY_SKIPPED_NOTE: str = "- skipped (repetition penalty already applied)"
 
-# ---------------------------------------------------------------------------
-# Maximum number of distinct keyboard patterns shown in the failure detail.
-# Declared at module level so it is easy to tune without touching method bodies.
-# ---------------------------------------------------------------------------
+# Maximum number of distinct keyboard patterns shown in a failure detail line.
 _KEYBOARD_DISPLAY_CAP: int = 3
+
+# ---------------------------------------------------------------------------
+# Leet-speak substitution table.
+# ---------------------------------------------------------------------------
+_LEET_TABLE: dict[int, str] = str.maketrans({
+    "@": "a", "4": "a",
+    "3": "e",
+    "0": "o",
+    "5": "s", "$": "s",
+    "7": "t",
+})
+
+def _normalise_for_lookup(pw: str) -> str:
+    """Prepare *pw* for common-password lookup."""
+    nfkd     = unicodedata.normalize("NFKD", pw.lower())
+    ascii_pw = nfkd.encode("ascii", errors="ignore").decode("ascii")
+    normalised = ascii_pw.translate(_LEET_TABLE)
+    stripped   = normalised.strip(_PUNCTUATION_STRIP)
+    # Return both forms; the caller checks each against COMMON_PASSWORDS.
+    return normalised, stripped
+
+_PUNCTUATION_STRIP: str = r"""0123456789!@#$%^&*()-_=+[]{}|;:,.<>?/\\ \"'`~"""
+
+# ---------------------------------------------------------------------------
+# Character profile
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class _CharProfile:
@@ -43,12 +67,10 @@ class _CharProfile:
     has_digit:     bool
     has_special:   bool
     has_non_ascii: bool
-    char_counts: MappingProxyType[str, int]
+    char_counts:   MappingProxyType  # type: ignore[type-arg]
 
-    _sorted_counts: tuple[tuple[str, int], ...] = field(
-        init=False, repr=False, compare=False,
-        default=(),
-    )
+    # Pre-sorted (char, count) pairs; derived in __post_init__.
+    _sorted_counts: tuple = field(init=False, repr=False, compare=False, default=())
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -59,13 +81,9 @@ class _CharProfile:
             ),
         )
 
-    # ------------------------------------------------------------------
-    # Factory
-    # ------------------------------------------------------------------
-
     @classmethod
     def from_password(cls, pw: str) -> _CharProfile:
-        """Build a profile from *pw* in a genuine single O(n) pass."""
+        """Build a profile from *pw* in a single O(n) pass."""
         has_upper     = False
         has_lower     = False
         has_digit     = False
@@ -75,15 +93,11 @@ class _CharProfile:
 
         for c in pw:
             counts[c] += 1
-            if not has_upper     and c.isupper():        has_upper     = True
-            if not has_lower     and c.islower():        has_lower     = True
-            if not has_digit     and c.isdigit():        has_digit     = True
-            if not has_special   and c in SPECIAL_CHARS: has_special   = True
-            if not has_non_ascii and ord(c) > 127:       has_non_ascii = True
-
-        # Freeze the frequency map before handing it to the dataclass.
-        # _sorted_counts is derived automatically via __post_init__.
-        frozen_map: MappingProxyType[str, int] = MappingProxyType(dict(counts))
+            if not has_upper     and c.isupper():         has_upper     = True
+            if not has_lower     and c.islower():         has_lower     = True
+            if not has_digit     and c.isdigit():         has_digit     = True
+            if not has_special   and c in SPECIAL_CHARS:  has_special   = True
+            if not has_non_ascii and ord(c) > 127:        has_non_ascii = True
 
         return cls(
             length        = len(pw),
@@ -92,23 +106,19 @@ class _CharProfile:
             has_digit     = has_digit,
             has_special   = has_special,
             has_non_ascii = has_non_ascii,
-            char_counts   = frozen_map,
+            char_counts   = MappingProxyType(dict(counts)),
         )
 
-    # ------------------------------------------------------------------
-    # Public accessor
-    # ------------------------------------------------------------------
-
-    def most_common(self, n: int = 1) -> tuple[tuple[str, int], ...]:
+    def most_common(self, n: int = 1) -> tuple:
         """Return the *n* most common ``(char, count)`` pairs, descending."""
         return self._sorted_counts[:n]
 
+# ---------------------------------------------------------------------------
+# Analyser
+# ---------------------------------------------------------------------------
+
 class PasswordAnalyzer:
     """Stateless password strength analyser."""
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def analyze(self, password: str) -> PasswordAnalysis:
         """Analyse *password* and return a fully populated :class:`PasswordAnalysis`."""
@@ -124,7 +134,9 @@ class PasswordAnalyzer:
         entropy_bits      = self._calculate_entropy(profile)
         repetition_result = self._check_no_repeated_chars(profile)
         entropy_result    = self._check_entropy(
-            entropy_bits, repetition_passed=repetition_result.passed
+            entropy_bits,
+            repetition_passed=repetition_result.passed,
+            password_length=profile.length,
         )
 
         common_result   = self._check_no_common_password(password)
@@ -142,6 +154,7 @@ class PasswordAnalyzer:
             self._check_has_digit(profile),
             self._check_has_special(profile),
             self._check_char_variety(profile),
+            self._check_char_uniqueness(profile),
             common_result,
             keyboard_result,
             repetition_result,
@@ -151,28 +164,29 @@ class PasswordAnalyzer:
         score        = min(100, sum(c.score for c in criteria_list))
         label, color = self._strength_band(score)
 
-        suggestions_list = [
+        suggestions = tuple(
             c.suggestion
             for c in criteria_list
             if not c.skipped and not c.passed and c.suggestion
-        ]
+        )
 
         return PasswordAnalysis(
-            password       = password,
-            score          = score,
-            strength_label = label,
-            strength_color = color,
-            criteria       = tuple(criteria_list),
-            entropy_bits   = entropy_bits,
-            suggestions    = tuple(suggestions_list),
+            # Store only the masked form and length — never the raw password.
+            password_masked = _masked_password(password),
+            password_length = len(password),
+            score           = score,
+            strength_label  = label,
+            strength_color  = color,
+            criteria        = tuple(criteria_list),
+            entropy_bits    = entropy_bits,
+            suggestions     = suggestions,
         )
 
     # ------------------------------------------------------------------
-    # Criterion checks — each returns a CriterionResult
+    # Criterion checks
     # ------------------------------------------------------------------
 
     def _check_length_minimum(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password meets the bare minimum length."""
         passed = profile.length >= LENGTH_MINIMUM
         w      = SCORE_WEIGHTS["length_minimum"]
         return CriterionResult(
@@ -185,7 +199,6 @@ class PasswordAnalyzer:
         )
 
     def _check_length_good(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password meets the recommended length."""
         passed = profile.length >= LENGTH_GOOD
         w      = SCORE_WEIGHTS["length_good"]
         return CriterionResult(
@@ -204,7 +217,6 @@ class PasswordAnalyzer:
         )
 
     def _check_length_excellent(self, profile: _CharProfile) -> CriterionResult:
-        """Award bonus points for an excellent (very long) password."""
         passed = profile.length >= LENGTH_EXCELLENT
         w      = SCORE_WEIGHTS["length_excellent"]
         return CriterionResult(
@@ -224,7 +236,6 @@ class PasswordAnalyzer:
         )
 
     def _check_has_uppercase(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password contains at least one uppercase letter."""
         w = SCORE_WEIGHTS["has_uppercase"]
         return CriterionResult(
             name       = "Uppercase letters",
@@ -243,7 +254,6 @@ class PasswordAnalyzer:
         )
 
     def _check_has_lowercase(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password contains at least one lowercase letter."""
         w = SCORE_WEIGHTS["has_lowercase"]
         return CriterionResult(
             name       = "Lowercase letters",
@@ -262,7 +272,6 @@ class PasswordAnalyzer:
         )
 
     def _check_has_digit(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password contains at least one digit."""
         w = SCORE_WEIGHTS["has_digit"]
         return CriterionResult(
             name       = "Digits",
@@ -281,7 +290,6 @@ class PasswordAnalyzer:
         )
 
     def _check_has_special(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password contains at least one special character."""
         w = SCORE_WEIGHTS["has_special"]
         return CriterionResult(
             name       = "Special characters",
@@ -306,7 +314,7 @@ class PasswordAnalyzer:
             profile.has_lower,
             profile.has_digit,
             profile.has_special,
-            profile.has_non_ascii,   # counts as a valid fifth class
+            profile.has_non_ascii,
         ))
         passed = classes >= 3
         w      = SCORE_WEIGHTS["char_variety"]
@@ -323,9 +331,31 @@ class PasswordAnalyzer:
             ),
         )
 
+    def _check_char_uniqueness(self, profile: _CharProfile) -> CriterionResult:
+        """Award points if at least 60% of the password's characters are distinct."""
+        unique = len(profile.char_counts)
+        ratio  = unique / profile.length if profile.length else 0.0
+        passed = ratio >= 0.6
+        w      = SCORE_WEIGHTS["char_uniqueness"]
+        return CriterionResult(
+            name       = "Character uniqueness",
+            passed     = passed,
+            score      = w if passed else 0,
+            max_score  = w,
+            detail     = (
+                f"{unique} unique chars out of {profile.length} ({ratio:.0%})"
+            ),
+            suggestion = (
+                "Avoid repetitive patterns — use a greater variety of distinct "
+                "characters."
+                if not passed else ""
+            ),
+        )
+
     def _check_no_common_password(self, pw: str) -> CriterionResult:
-        """Deduct all points if the password (case-insensitive) is in the common list."""
-        is_common = pw.lower() in COMMON_PASSWORDS
+        """Deduct all points if the password (or a normalised variant) is common."""
+        _norm, _stripped = _normalise_for_lookup(pw)
+        is_common = _norm in COMMON_PASSWORDS or _stripped in COMMON_PASSWORDS
         w         = SCORE_WEIGHTS["no_common_password"]
         return CriterionResult(
             name       = "Not a common password",
@@ -333,12 +363,13 @@ class PasswordAnalyzer:
             score      = 0 if is_common else w,
             max_score  = w,
             detail     = (
-                "Password appears in common password lists!"
+                "Password (or a common variant) appears in common password lists!"
                 if is_common
                 else "Not found in common password lists"
             ),
             suggestion = (
-                "Avoid well-known passwords — they are cracked instantly."
+                "Avoid well-known passwords and their simple substitutions — "
+                "they are cracked instantly."
                 if is_common else ""
             ),
         )
@@ -354,21 +385,18 @@ class PasswordAnalyzer:
 
         if skip:
             return CriterionResult(
-                name       = "No keyboard patterns",
-                passed     = False,
-                skipped    = True,
-                score      = 0,
-                max_score  = w,
-                detail     = "- skipped (common password already detected)",
+                name      = "No keyboard patterns",
+                passed    = False,
+                skipped   = True,
+                score     = 0,
+                max_score = w,
+                detail    = "- skipped (common password already detected)",
                 suggestion = "",
             )
 
         pw_lower = pw.lower()
-
         found: list[str] = [
-            pattern
-            for pattern in KEYBOARD_PATTERNS
-            if pattern in pw_lower
+            pattern for pattern in KEYBOARD_PATTERNS if pattern in pw_lower
         ]
 
         passed        = not found
@@ -401,7 +429,6 @@ class PasswordAnalyzer:
             )
 
         w = SCORE_WEIGHTS["no_repeated_chars"]
-
         most_common_char, most_common_count = profile.most_common(1)[0]
         ratio  = most_common_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
@@ -426,24 +453,32 @@ class PasswordAnalyzer:
         entropy_bits: float,
         *,
         repetition_passed: bool,
+        password_length:   int,
     ) -> CriterionResult:
-        """Award bonus points if the estimated entropy meets the threshold."""
+        """Award bonus points if estimated entropy meets the threshold."""
         w = SCORE_WEIGHTS["entropy_bonus"]
 
         if not repetition_passed:
             return CriterionResult(
-                name    = "Entropy",
-                passed  = False,
-                skipped = True,     # criterion was not evaluated — mark explicitly
-                score   = 0,
+                name      = "Entropy",
+                passed    = False,
+                skipped   = True,
+                score     = 0,
                 max_score = w,
-                detail  = (
+                detail    = (
                     f"Estimated entropy: {entropy_bits:.1f} bits "
                     f"{_ENTROPY_SKIPPED_NOTE}"
                 ),
-                # No suggestion: the repetition criterion already advises the user.
                 suggestion = "",
             )
+
+        # Append a length hint when a short password limits entropy more than
+        # character variety does, so users prioritise length first.
+        length_note = (
+            " — increase length first"
+            if password_length < LENGTH_GOOD
+            else ""
+        )
 
         passed = entropy_bits >= ENTROPY_GOOD_THRESHOLD
         return CriterionResult(
@@ -453,7 +488,7 @@ class PasswordAnalyzer:
             max_score  = w,
             detail     = (
                 f"Estimated entropy: {entropy_bits:.1f} bits "
-                f"(good >= {ENTROPY_GOOD_THRESHOLD:.0f} bits)"
+                f"(good >= {ENTROPY_GOOD_THRESHOLD:.0f} bits{length_note})"
             ),
             suggestion = (
                 "Increase length and character variety to raise entropy."
@@ -467,31 +502,31 @@ class PasswordAnalyzer:
 
     @staticmethod
     def _calculate_entropy(profile: _CharProfile) -> float:
-        """Estimate password entropy (bits) based on character pool and distribution."""
+        """Estimate password entropy (bits) from pool size and character distribution."""
         if profile.length == 0:
             return 0.0
 
-        # --- 1. Pool-based (upper-bound) entropy ---
+        # Pool-based (upper-bound) entropy per character
         pool = 0
         if profile.has_lower:     pool += 26
         if profile.has_upper:     pool += 26
         if profile.has_digit:     pool += 10
         if profile.has_special:   pool += len(SPECIAL_CHARS)
-        if profile.has_non_ascii: pool += 32  # conservative non-ASCII bonus
+        if profile.has_non_ascii: pool += 32   # conservative non-ASCII bonus
 
         if pool == 0:
             return 0.0
 
         pool_entropy_per_char = math.log2(pool)
 
-        # --- 2. Shannon entropy per character (distribution-aware) ---
+        # Shannon entropy per character (distribution-aware)
         total = profile.length
         shannon_per_char = -sum(
             (count / total) * math.log2(count / total)
             for count in profile.char_counts.values()
         )
 
-        # --- 3. Weighted blend ---
+        # Weighted blend
         entropy_per_char = (
             (1.0 - SHANNON_WEIGHT) * pool_entropy_per_char
             + SHANNON_WEIGHT       * shannon_per_char
