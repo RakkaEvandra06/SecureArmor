@@ -15,9 +15,9 @@ from .utils import is_utf_terminal as _is_utf_terminal
 # Layout constants
 # ---------------------------------------------------------------------------
 
-_BANNER_WIDTH:          int = 60
-_SEPARATOR_WIDTH:       int = 64
-_CRITERION_NAME_WIDTH:  int = 26
+_BANNER_WIDTH:         int = 60
+_SEPARATOR_WIDTH:      int = 64
+_CRITERION_NAME_WIDTH: int = 26
 
 # ---------------------------------------------------------------------------
 # Internal colour map
@@ -65,7 +65,6 @@ def _dim(text: str) -> str:
 # ANSI-aware string helpers
 # ---------------------------------------------------------------------------
 
-# Matches any ANSI CSI escape sequence (colours, bold, dim, reset, …).
 _ANSI_ESC: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
 
 def _visible_len(s: str) -> int:
@@ -86,9 +85,9 @@ def _rjust_ansi(s: str, width: int) -> str:
 # Public rendering functions
 # ---------------------------------------------------------------------------
 
-def print_analysis(analysis: PasswordAnalysis, *, show_password: bool = False) -> None:
+def print_analysis(analysis: PasswordAnalysis) -> None:
     """Render a full human-readable analysis block to stdout."""
-    _print_header(analysis, show_password=show_password)
+    _print_header(analysis)
     _print_score_panel(analysis)
     _print_criteria_table(analysis)
     if analysis.suggestions:
@@ -125,18 +124,11 @@ def print_separator() -> None:
 # Private rendering helpers
 # ---------------------------------------------------------------------------
 
-def _masked(password: str) -> str:
-    """Return a display-safe masked version of *password*."""
-    length = len(password)
-    if length <= 2:
-        return "*" * length
-    return password[0] + "*" * (length - 2) + password[-1]
-
-def _print_header(analysis: PasswordAnalysis, *, show_password: bool) -> None:
-    display = analysis.password if show_password else _masked(analysis.password)
+def _print_header(analysis: PasswordAnalysis) -> None:
+    """Print the password header line using the pre-masked form from the model."""
     print(
-        f"\n  {_bold('Password:')} {_dim(display)}"
-        f"  {_dim(f'({len(analysis.password)} chars)')}"
+        f"\n  {_bold('Password:')} {_dim(analysis.password_masked)}"
+        f"  {_dim(f'({analysis.password_length} chars)')}"
     )
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
@@ -167,10 +159,10 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     """Render the per-criterion results table."""
-    utf = _is_utf_terminal()
+    utf       = _is_utf_terminal()
     rule_char = "─" if utf else "-"
 
-    col = _CRITERION_NAME_WIDTH
+    col              = _CRITERION_NAME_WIDTH
     header_criterion = _ljust_ansi(_bold("Criterion"), col)
     header_score     = _rjust_ansi(_bold("Score"), 8)
     print(f"  {'':2}  {header_criterion}  {header_score}  {_dim('Detail')}")
