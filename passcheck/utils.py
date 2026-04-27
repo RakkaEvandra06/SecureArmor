@@ -26,3 +26,10 @@ def is_utf_terminal() -> bool:
         return codecs.lookup(enc).name in _UTF_CODEC_NAMES
     except LookupError:
         return True   # safe default: prefer Unicode, let the terminal decide
+
+def masked_password(password: str) -> str:
+    """Return a display-safe masked version of *password*."""
+    length = len(password)
+    if length <= 2:
+        return "*" * length
+    return password[0] + "*" * (length - 2) + password[-1]
