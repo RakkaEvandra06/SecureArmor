@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import functools
-import getpass
 import json
 import sys
 from collections.abc import Iterator
@@ -19,7 +17,7 @@ from .display import (
 from .models import PasswordAnalysis
 from .scoring import criteria_summary
 
-# Module-level analyzer — stateless, so sharing one instance is safe.
+# Module-level analyzer — stateless, so one shared instance is safe.
 _analyzer = PasswordAnalyzer()
 
 # ---------------------------------------------------------------------------
@@ -29,6 +27,39 @@ _analyzer = PasswordAnalyzer()
 class _ExitCode(IntEnum):
     OK    = 0
     ERROR = 1
+
+# ---------------------------------------------------------------------------
+# Security helpers
+# ---------------------------------------------------------------------------
+
+_insecure_flag_warned: bool = False
+
+def _warn_insecure_flag() -> None:
+    """Emit a one-time warning to stderr when --password is used directly."""
+    global _insecure_flag_warned
+    if _insecure_flag_warned:
+        return
+    _insecure_flag_warned = True
+    click.echo(
+        "Warning: Passing a password via --password exposes it in your shell "
+        "history AND in the process list (visible to all users via 'ps aux' or "
+        "'/proc/<pid>/cmdline'). Use the interactive prompt instead for secure "
+        "input.\n",
+        err=True,
+    )
+
+def _scrub_argv_password() -> None:
+    """Overwrite the password value in sys.argv with ``***``."""
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        # Handles: --password SECRET  or  -p SECRET
+        if arg in ("--password", "-p") and i + 1 < len(argv):
+            argv[i + 1] = "***"
+            return
+        # Handles: --password=SECRET
+        if arg.startswith("--password="):
+            argv[i] = "--password=***"
+            return
 
 # ---------------------------------------------------------------------------
 # JSON output helper
@@ -60,13 +91,12 @@ def cli(ctx: click.Context) -> None:
 @click.option(
     "-p", "--password",
     default=None,
-    help="Password to analyse. Warning: visible in shell history.",
-)
-@click.option(
-    "--show-password",
-    is_flag=True,
-    default=False,
-    help="Show the password (partially masked) in output.",
+    help=(
+        "Password to analyse. "
+        "WARNING: exposes the password in your shell history AND in the process "
+        "list (visible to all users via 'ps aux'). "
+        "Use the interactive prompt for secure input."
+    ),
 )
 @click.option(
     "--json", "output_json",
@@ -74,11 +104,13 @@ def cli(ctx: click.Context) -> None:
     default=False,
     help="Output results as JSON.",
 )
-def check(password: str | None, show_password: bool, output_json: bool) -> None:
+def check(password: str | None, output_json: bool) -> None:
     """Analyse a single password."""
     if password is not None:
         _warn_insecure_flag()
-        _run_analysis(password, show_password=show_password, output_json=output_json)
+        # Scrub sys.argv as early as possible to close the process-list window.
+        _scrub_argv_password()
+        _run_analysis(password, output_json=output_json)
     elif not sys.stdin.isatty():
         click.echo(
             "Error: stdin is not a TTY. Did you mean to use 'passcheck batch'?\n"
@@ -89,22 +121,16 @@ def check(password: str | None, show_password: bool, output_json: bool) -> None:
         )
         raise SystemExit(_ExitCode.ERROR)
     else:
-        _interactive_loop(show_password=show_password, output_json=output_json)
+        _interactive_loop(output_json=output_json)
 
 @cli.command()
-@click.option(
-    "--show-password",
-    is_flag=True,
-    default=False,
-    help="Show the password (partially masked) in output.",
-)
 @click.option(
     "--json", "output_json",
     is_flag=True,
     default=False,
     help="Output results as JSON.",
 )
-def batch(show_password: bool, output_json: bool) -> None:
+def batch(output_json: bool) -> None:
     """Analyse multiple passwords from stdin (one per line)."""
     if sys.stdin.isatty():
         click.echo(
@@ -118,7 +144,7 @@ def batch(show_password: bool, output_json: bool) -> None:
     if output_json:
         _batch_json()
     else:
-        _batch_text(show_password=show_password)
+        _batch_text()
 
 # ---------------------------------------------------------------------------
 # Batch mode helpers
@@ -137,18 +163,17 @@ def _batch_json() -> None:
         click.echo("Error: No passwords received on stdin.", err=True)
         raise SystemExit(_ExitCode.ERROR)
 
-def _batch_text(*, show_password: bool) -> None:
+
+def _batch_text() -> None:
     """Stream human-readable analysis blocks to stdout, one per password."""
     found_any = False
     first     = True
 
     for pw in _stdin_passwords(output_json=False):
         found_any = True
-        # Print a separator *before* every entry except the first, so no
-        # trailing separator is emitted after the last password.
         if not first:
             print_separator()
-        _run_analysis(pw, show_password=show_password, output_json=False)
+        _run_analysis(pw, output_json=False)
         first = False
 
     if not found_any:
@@ -188,17 +213,18 @@ def _analyze(password: str) -> PasswordAnalysis:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(_ExitCode.ERROR) from exc
 
-def _run_analysis(password: str, *, show_password: bool, output_json: bool) -> None:
+def _run_analysis(password: str, *, output_json: bool) -> None:
     """Analyse *password* and dispatch to the appropriate renderer."""
     analysis = _analyze(password)
-
     if output_json:
         print_analysis_json(analysis)
     else:
-        print_analysis(analysis, show_password=show_password)
+        print_analysis(analysis)
 
-def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
+def _interactive_loop(*, output_json: bool) -> None:
     """Run the interactive prompt loop until the user quits."""
+    import getpass
+
     if not output_json:
         print_banner()
 
@@ -213,8 +239,6 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
 
         if pw.lower() in {"quit", "exit", "q"}:
             if output_json:
-                # Emit a structured sentinel so JSON consumers can detect a
-                # clean exit rather than treating the EOF as an error.
                 _emit_json({"event": "exit"})
             else:
                 print("\n  Goodbye!\n")
@@ -227,19 +251,10 @@ def _interactive_loop(*, show_password: bool, output_json: bool) -> None:
                 print("  Please enter a non-empty password.\n")
             continue
 
-        _run_analysis(pw, show_password=show_password, output_json=output_json)
+        _run_analysis(pw, output_json=output_json)
 
         if not output_json:
             print_separator()
-
-@functools.lru_cache(maxsize=None)
-def _warn_insecure_flag() -> None:
-    """Emit a one-time warning to stderr when --password is used directly."""
-    click.echo(
-        "Warning: Passing a password via --password may expose it in your "
-        "shell history. Consider using the interactive prompt instead.\n",
-        err=True,
-    )
 
 # ---------------------------------------------------------------------------
 # Entry point
