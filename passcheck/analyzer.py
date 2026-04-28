@@ -42,16 +42,21 @@ _LEET_TABLE: dict[int, str] = str.maketrans({
     "7": "t",
 })
 
-def _normalise_for_lookup(pw: str) -> str:
+# ---------------------------------------------------------------------------
+# FIX (Bug 1): _PUNCTUATION_STRIP is now defined BEFORE _normalise_for_lookup
+# so the function body can reference it without a NameError at call time.
+# ---------------------------------------------------------------------------
+_PUNCTUATION_STRIP: str = r"""0123456789!@#$%^&*()-_=+[]{}|;:,.<>?/\\ \"'`~"""
+
+def _normalise_for_lookup(pw: str) -> tuple[str, str]:
+    # FIX (Bug 1): return type corrected from `str` to `tuple[str, str]`
     """Prepare *pw* for common-password lookup."""
-    nfkd     = unicodedata.normalize("NFKD", pw.lower())
-    ascii_pw = nfkd.encode("ascii", errors="ignore").decode("ascii")
+    nfkd       = unicodedata.normalize("NFKD", pw.lower())
+    ascii_pw   = nfkd.encode("ascii", errors="ignore").decode("ascii")
     normalised = ascii_pw.translate(_LEET_TABLE)
     stripped   = normalised.strip(_PUNCTUATION_STRIP)
     # Return both forms; the caller checks each against COMMON_PASSWORDS.
     return normalised, stripped
-
-_PUNCTUATION_STRIP: str = r"""0123456789!@#$%^&*()-_=+[]{}|;:,.<>?/\\ \"'`~"""
 
 # ---------------------------------------------------------------------------
 # Character profile
@@ -93,11 +98,11 @@ class _CharProfile:
 
         for c in pw:
             counts[c] += 1
-            if not has_upper     and c.isupper():         has_upper     = True
-            if not has_lower     and c.islower():         has_lower     = True
-            if not has_digit     and c.isdigit():         has_digit     = True
-            if not has_special   and c in SPECIAL_CHARS:  has_special   = True
-            if not has_non_ascii and ord(c) > 127:        has_non_ascii = True
+            if not has_upper     and c.isupper():        has_upper     = True
+            if not has_lower     and c.islower():        has_lower     = True
+            if not has_digit     and c.isdigit():        has_digit     = True
+            if not has_special   and c in SPECIAL_CHARS: has_special   = True
+            if not has_non_ascii and ord(c) > 127:       has_non_ascii = True
 
         return cls(
             length        = len(pw),
@@ -109,9 +114,25 @@ class _CharProfile:
             char_counts   = MappingProxyType(dict(counts)),
         )
 
-    def most_common(self, n: int = 1) -> tuple:
+    def most_common(self, n: int = 1) -> tuple:  # type: ignore[type-arg]
         """Return the *n* most common ``(char, count)`` pairs, descending."""
         return self._sorted_counts[:n]
+
+def _non_ascii_pool_size(char_counts: MappingProxyType) -> int:  # type: ignore[type-arg]
+    """Return an estimated pool size for the non-ASCII characters in *char_counts*."""
+    max_ord = max(
+        (ord(c) for c in char_counts if ord(c) > 127),
+        default=0,
+    )
+    if max_ord == 0:
+        return 0
+    if max_ord < 0x0250:   # Latin Extended (U+0080–U+024F)
+        return 128
+    if max_ord < 0x0500:   # Greek, Coptic, Cyrillic (U+0370–U+04FF)
+        return 256
+    if max_ord < 0x4E00:   # Arabic, Hebrew, misc scripts
+        return 512
+    return 1024            # CJK Unified Ideographs and beyond
 
 # ---------------------------------------------------------------------------
 # Analyser
@@ -385,12 +406,12 @@ class PasswordAnalyzer:
 
         if skip:
             return CriterionResult(
-                name      = "No keyboard patterns",
-                passed    = False,
-                skipped   = True,
-                score     = 0,
-                max_score = w,
-                detail    = "- skipped (common password already detected)",
+                name       = "No keyboard patterns",
+                passed     = False,
+                skipped    = True,
+                score      = 0,
+                max_score  = w,
+                detail     = "- skipped (common password already detected)",
                 suggestion = "",
             )
 
@@ -433,14 +454,16 @@ class PasswordAnalyzer:
         ratio  = most_common_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
 
+        char_category = unicodedata.category(most_common_char)
+
         return CriterionResult(
             name       = "No excessive repetition",
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
             detail     = (
-                f"'{most_common_char}' appears {most_common_count}x"
-                f" ({ratio:.0%} of password)"
+                f"One character (Unicode category {char_category}) appears "
+                f"{most_common_count}x ({ratio:.0%} of password)"
             ),
             suggestion = (
                 "Avoid repeating the same character too many times."
@@ -460,12 +483,12 @@ class PasswordAnalyzer:
 
         if not repetition_passed:
             return CriterionResult(
-                name      = "Entropy",
-                passed    = False,
-                skipped   = True,
-                score     = 0,
-                max_score = w,
-                detail    = (
+                name       = "Entropy",
+                passed     = False,
+                skipped    = True,
+                score      = 0,
+                max_score  = w,
+                detail     = (
                     f"Estimated entropy: {entropy_bits:.1f} bits "
                     f"{_ENTROPY_SKIPPED_NOTE}"
                 ),
@@ -506,27 +529,28 @@ class PasswordAnalyzer:
         if profile.length == 0:
             return 0.0
 
-        # Pool-based (upper-bound) entropy per character
+        # Pool-based (upper-bound) entropy per character.
         pool = 0
         if profile.has_lower:     pool += 26
         if profile.has_upper:     pool += 26
         if profile.has_digit:     pool += 10
         if profile.has_special:   pool += len(SPECIAL_CHARS)
-        if profile.has_non_ascii: pool += 32   # conservative non-ASCII bonus
+        if profile.has_non_ascii:
+            pool += _non_ascii_pool_size(profile.char_counts)
 
         if pool == 0:
             return 0.0
 
         pool_entropy_per_char = math.log2(pool)
 
-        # Shannon entropy per character (distribution-aware)
+        # Shannon entropy per character (distribution-aware).
         total = profile.length
         shannon_per_char = -sum(
             (count / total) * math.log2(count / total)
             for count in profile.char_counts.values()
         )
 
-        # Weighted blend
+        # Weighted blend.
         entropy_per_char = (
             (1.0 - SHANNON_WEIGHT) * pool_entropy_per_char
             + SHANNON_WEIGHT       * shannon_per_char
