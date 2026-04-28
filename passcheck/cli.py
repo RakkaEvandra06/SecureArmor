@@ -32,14 +32,8 @@ class _ExitCode(IntEnum):
 # Security helpers
 # ---------------------------------------------------------------------------
 
-_insecure_flag_warned: bool = False
-
 def _warn_insecure_flag() -> None:
-    """Emit a one-time warning to stderr when --password is used directly."""
-    global _insecure_flag_warned
-    if _insecure_flag_warned:
-        return
-    _insecure_flag_warned = True
+    """Emit a warning to stderr whenever --password is used directly."""
     click.echo(
         "Warning: Passing a password via --password exposes it in your shell "
         "history AND in the process list (visible to all users via 'ps aux' or "
