@@ -33,14 +33,10 @@ class AnalysisSummary(TypedDict):
 
 def score_bar(score: int, width: int = 20) -> str:
     """Return a text progress bar representing *score* (0–100)."""
-    if isinstance(width, bool):
+    if isinstance(width, bool) or not isinstance(width, int):
         raise TypeError(
-            "score_bar() requires an integer width, got bool. "
+            f"score_bar() requires a plain int width, got {type(width).__name__!r}. "
             "Pass a plain int such as score_bar(score, width=20)."
-        )
-    if not isinstance(width, int):
-        raise TypeError(
-            f"score_bar() requires an integer width, got {type(width).__name__!r}."
         )
     if width <= 0:
         raise ValueError(
@@ -61,7 +57,6 @@ def score_bar(score: int, width: int = 20) -> str:
 def max_possible_score(criteria: Sequence[CriterionResult]) -> int:
     """Return the sum of ``max_score`` values for all *non-skipped* criteria."""
     return sum(c.max_score for c in criteria if not c.skipped)
-
 
 def criteria_summary(analysis: PasswordAnalysis) -> AnalysisSummary:
     """Return a typed, JSON-serialisable summary dict for *analysis*."""
