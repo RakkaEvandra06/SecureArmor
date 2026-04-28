@@ -30,15 +30,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Security",
     "Topic :: Utilities",
 ]
-requires-python = ">=3.8"
+
+# enforced by PEP 604 union syntax (`str | None`) used throughout the source.
+requires-python = ">=3.10"
 
 # ── Runtime dependencies ──────────────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ passcheck = ["py.typed"]
 
 [tool.black]
 line-length    = 88
-target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+target-version = ['py310', 'py311', 'py312']
 include        = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -132,7 +132,7 @@ exclude = [
 ]
 
 [tool.mypy]
-python_version          = "3.8"
+python_version          = "3.10"
 warn_return_any         = true
 warn_unused_configs     = true
 disallow_untyped_defs   = true
@@ -191,13 +191,11 @@ show_missing = true
 skip_covered = false
 fail_under   = 80
 
-# Optional: Add bandit security linter configuration
 [tool.bandit]
 exclude_dirs = ["tests", "docs"]
 skids        = ["B101", "B311", "B403"]
 severity     = "medium"
 confidence   = "medium"
 
-# Optional: Add safety checker configuration
 [tool.safety]
 ignore = ["12345"]  # Add any specific vulnerability IDs to ignore if needed
