@@ -80,7 +80,9 @@ if not (0.0 < SHANNON_WEIGHT < 1.0):
 REPEATED_CHAR_RATIO: float = 0.4
 
 if not (0.0 < REPEATED_CHAR_RATIO < 1.0):
-    raise ValueError(f"REPEATED_CHAR_RATIO must be in (0, 1), got {REPEATED_CHAR_RATIO!r}.")
+    raise ValueError(
+        f"REPEATED_CHAR_RATIO must be in (0, 1), got {REPEATED_CHAR_RATIO!r}."
+    )
 
 # ---------------------------------------------------------------------------
 # Strength bands
@@ -115,7 +117,7 @@ VALID_COLOUR_KEYS: frozenset[str] = frozenset(colour for _, _, colour in STRENGT
 SPECIAL_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
 
 # ---------------------------------------------------------------------------
-# Keyboard walk patterns.
+# Keyboard walk patterns
 # ---------------------------------------------------------------------------
 
 # Internal guard — NOT part of the public API (removed from __all__).
@@ -158,7 +160,7 @@ if _short_patterns:
 del _short_patterns
 
 # ---------------------------------------------------------------------------
-# Common passwords list.
+# Common passwords list
 # ---------------------------------------------------------------------------
 _BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
     "0.0.0.000", "0.0.000", "0000", "00000",
@@ -342,28 +344,28 @@ def _load_common_passwords() -> frozenset[str]:
         return _BUILTIN_COMMON_PASSWORDS
 
     entries: list[str] = []
-    bad_case: list[str] = []
-    for raw_line in data_path.read_text("utf-8").splitlines():
-        entry = raw_line.strip()
-        if not entry:
-            continue
-        if entry != entry.lower():
-            bad_case.append(entry)
-        else:
-            entries.append(entry)
+    normalised_count: int = 0
 
-    if bad_case:
-        _log.warning(
-            "common_passwords.txt contains %d entries that are not fully "
-            "lower-cased and have been skipped: %s%s",
-            len(bad_case),
-            bad_case[:10],
-            "..." if len(bad_case) > 10 else "",
+    for raw_line in data_path.read_text("utf-8").splitlines():
+        raw_entry = raw_line.strip()
+        if not raw_entry:
+            continue
+        # FIX (Bug 6): normalise to lowercase rather than silently skipping.
+        entry = raw_entry.lower()
+        if entry != raw_entry:
+            normalised_count += 1
+        entries.append(entry)
+
+    if normalised_count:
+        _log.debug(
+            "common_passwords.txt: normalised %d mixed-case entries to lowercase.",
+            normalised_count,
         )
 
     loaded = frozenset(entries)
     _log.debug("Loaded %d common passwords from %s.", len(loaded), data_path)
     return loaded | _BUILTIN_COMMON_PASSWORDS
+
 
 COMMON_PASSWORDS: frozenset[str] = _load_common_passwords()
 
