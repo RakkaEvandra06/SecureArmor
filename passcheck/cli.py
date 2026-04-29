@@ -148,10 +148,14 @@ def _batch_json() -> None:
     """Stream one JSON object per line (NDJSON) to stdout."""
     found_any = False
 
-    for pw in _stdin_passwords(output_json=True):
-        found_any = True
-        result = criteria_summary(_analyze(pw))
-        _emit_json(result)
+    try:
+        for pw in _stdin_passwords(output_json=True):
+            found_any = True
+            result = criteria_summary(_analyze(pw))
+            _emit_json(result)
+    except KeyboardInterrupt:
+        click.echo("\nInterrupted.", err=True)
+        raise SystemExit(_ExitCode.OK)
 
     if not found_any:
         click.echo("Error: No passwords received on stdin.", err=True)
@@ -163,12 +167,16 @@ def _batch_text() -> None:
     found_any = False
     first     = True
 
-    for pw in _stdin_passwords(output_json=False):
-        found_any = True
-        if not first:
-            print_separator()
-        _run_analysis(pw, output_json=False)
-        first = False
+    try:
+        for pw in _stdin_passwords(output_json=False):
+            found_any = True
+            if not first:
+                print_separator()
+            _run_analysis(pw, output_json=False)
+            first = False
+    except KeyboardInterrupt:
+        click.echo("\nInterrupted.", err=True)
+        raise SystemExit(_ExitCode.OK)
 
     if not found_any:
         click.echo("Error: No passwords received on stdin.", err=True)
@@ -214,6 +222,7 @@ def _run_analysis(password: str, *, output_json: bool) -> None:
         print_analysis_json(analysis)
     else:
         print_analysis(analysis)
+        print()  # trailing blank line owned here, not inside print_analysis
 
 def _interactive_loop(*, output_json: bool) -> None:
     """Run the interactive prompt loop until the user quits."""
