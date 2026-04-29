@@ -92,7 +92,6 @@ def print_analysis(analysis: PasswordAnalysis) -> None:
     _print_criteria_table(analysis)
     if analysis.suggestions:
         _print_suggestions(analysis)
-    print()
 
 def print_analysis_json(analysis: PasswordAnalysis) -> None:
     """Render *analysis* as a compact JSON line (NDJSON-compatible) to stdout."""
