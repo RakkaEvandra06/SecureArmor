@@ -5,8 +5,6 @@ import sys
 
 # ---------------------------------------------------------------------------
 # Complete set of codec *canonical* names that indicate a UTF-capable stream.
-# codecs.lookup(enc).name always returns the canonical name, so aliases like
-# "UTF8" or "utf8" resolve correctly before comparison.
 # ---------------------------------------------------------------------------
 _UTF_CODEC_NAMES: frozenset[str] = frozenset({
     "utf-8",
