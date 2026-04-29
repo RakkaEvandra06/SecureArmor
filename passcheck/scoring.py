@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import List, TypedDict
+from typing import TypedDict
 
 from .models import CriterionResult, PasswordAnalysis
 from .utils import is_utf_terminal as _is_utf_terminal
@@ -24,8 +24,8 @@ class AnalysisSummary(TypedDict):
     entropy_bits: float
     passed:       int
     total:        int
-    suggestions:  List[str]               # list is JSON-array; List used for py38 compat
-    criteria:     List[_CriterionSummary]
+    suggestions:  list[str]
+    criteria:     list[_CriterionSummary]
 
 # ---------------------------------------------------------------------------
 # Public helpers
