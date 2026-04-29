@@ -17,6 +17,8 @@ __all__ = [
     "SPECIAL_CHARS",
     "KEYBOARD_PATTERNS",
     "COMMON_PASSWORDS",
+    "CHAR_UNIQUENESS_MIN_RATIO",
+    "CHAR_VARIETY_MIN_CLASSES",
 ]
 
 _log = _logging.getLogger(__name__)
@@ -82,6 +84,25 @@ REPEATED_CHAR_RATIO: float = 0.4
 if not (0.0 < REPEATED_CHAR_RATIO < 1.0):
     raise ValueError(
         f"REPEATED_CHAR_RATIO must be in (0, 1), got {REPEATED_CHAR_RATIO!r}."
+    )
+
+# ---------------------------------------------------------------------------
+# Analyser policy thresholds  (Minor fix: extracted from magic literals)
+# ---------------------------------------------------------------------------
+
+# Minimum ratio of distinct characters required by _check_char_uniqueness.
+CHAR_UNIQUENESS_MIN_RATIO: float = 0.6
+
+# Minimum number of character classes required by _check_char_variety.
+CHAR_VARIETY_MIN_CLASSES: int = 3
+
+if not (0.0 < CHAR_UNIQUENESS_MIN_RATIO <= 1.0):
+    raise ValueError(
+        f"CHAR_UNIQUENESS_MIN_RATIO must be in (0, 1], got {CHAR_UNIQUENESS_MIN_RATIO!r}."
+    )
+if CHAR_VARIETY_MIN_CLASSES < 2:
+    raise ValueError(
+        f"CHAR_VARIETY_MIN_CLASSES must be >= 2, got {CHAR_VARIETY_MIN_CLASSES!r}."
     )
 
 # ---------------------------------------------------------------------------
@@ -346,11 +367,20 @@ def _load_common_passwords() -> frozenset[str]:
     entries: list[str] = []
     normalised_count: int = 0
 
-    for raw_line in data_path.read_text("utf-8").splitlines():
+    try:
+        file_text = data_path.read_text("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        _log.warning(
+            "Could not read common passwords from %s (%s). "
+            "Falling back to the built-in list (%d entries).",
+            data_path, exc, len(_BUILTIN_COMMON_PASSWORDS),
+        )
+        return _BUILTIN_COMMON_PASSWORDS
+
+    for raw_line in file_text.splitlines():
         raw_entry = raw_line.strip()
         if not raw_entry:
             continue
-        # FIX (Bug 6): normalise to lowercase rather than silently skipping.
         entry = raw_entry.lower()
         if entry != raw_entry:
             normalised_count += 1
@@ -363,8 +393,13 @@ def _load_common_passwords() -> frozenset[str]:
         )
 
     loaded = frozenset(entries)
-    _log.debug("Loaded %d common passwords from %s.", len(loaded), data_path)
-    return loaded | _BUILTIN_COMMON_PASSWORDS
+
+    result = loaded | _BUILTIN_COMMON_PASSWORDS
+    _log.debug(
+        "Loaded %d entries from %s; %d built-in entries; %d total after merge.",
+        len(loaded), data_path, len(_BUILTIN_COMMON_PASSWORDS), len(result),
+    )
+    return result
 
 
 COMMON_PASSWORDS: frozenset[str] = _load_common_passwords()
