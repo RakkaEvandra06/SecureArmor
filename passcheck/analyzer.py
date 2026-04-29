@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from .constants import (
+    CHAR_UNIQUENESS_MIN_RATIO,
+    CHAR_VARIETY_MIN_CLASSES,
     COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
     KEYBOARD_PATTERNS,
@@ -37,26 +39,26 @@ _KEYBOARD_DISPLAY_CAP: int = 3
 _LEET_TABLE: dict[int, str] = str.maketrans({
     "@": "a", "4": "a",
     "3": "e",
+    "1": "l",   # most common leet digit; covers "adm1n", "passw0rd1"
+    "!": "i",   # "pass!on" → "passion"
+    "|": "i",
+    "6": "g",   # "6oogle" → "google"
+    "8": "b",   # "8ball" → "bball"
     "0": "o",
     "5": "s", "$": "s",
     "7": "t",
 })
 
-# ---------------------------------------------------------------------------
-# FIX (Bug 1): _PUNCTUATION_STRIP is now defined BEFORE _normalise_for_lookup
-# so the function body can reference it without a NameError at call time.
-# ---------------------------------------------------------------------------
 _PUNCTUATION_STRIP: str = r"""0123456789!@#$%^&*()-_=+[]{}|;:,.<>?/\\ \"'`~"""
 
-def _normalise_for_lookup(pw: str) -> tuple[str, str]:
-    # FIX (Bug 1): return type corrected from `str` to `tuple[str, str]`
-    """Prepare *pw* for common-password lookup."""
+def _normalise_for_lookup(pw: str) -> tuple[str, str, str]:
+    """Return (ascii_lower, leet_normalised, leet_stripped) for COMMON_PASSWORDS lookup."""
     nfkd       = unicodedata.normalize("NFKD", pw.lower())
     ascii_pw   = nfkd.encode("ascii", errors="ignore").decode("ascii")
     normalised = ascii_pw.translate(_LEET_TABLE)
     stripped   = normalised.strip(_PUNCTUATION_STRIP)
-    # Return both forms; the caller checks each against COMMON_PASSWORDS.
-    return normalised, stripped
+
+    return ascii_pw, normalised, stripped
 
 # ---------------------------------------------------------------------------
 # Character profile
@@ -126,9 +128,10 @@ def _non_ascii_pool_size(char_counts: MappingProxyType) -> int:  # type: ignore[
     )
     if max_ord == 0:
         return 0
-    if max_ord < 0x0250:   # Latin Extended (U+0080–U+024F)
+    if max_ord < 0x0250:   # Latin-1 Supplement + Latin Extended-A/B (U+0080–U+024F)
         return 128
-    if max_ord < 0x0500:   # Greek, Coptic, Cyrillic (U+0370–U+04FF)
+    if max_ord < 0x0500:   # IPA Ext, Spacing Modifiers, Combining Marks,
+                            #   Greek, Coptic, Cyrillic (U+0250–U+04FF)
         return 256
     if max_ord < 0x4E00:   # Arabic, Hebrew, misc scripts
         return 512
@@ -337,7 +340,7 @@ class PasswordAnalyzer:
             profile.has_special,
             profile.has_non_ascii,
         ))
-        passed = classes >= 3
+        passed = classes >= CHAR_VARIETY_MIN_CLASSES
         w      = SCORE_WEIGHTS["char_variety"]
         return CriterionResult(
             name       = "Character variety",
@@ -356,7 +359,7 @@ class PasswordAnalyzer:
         """Award points if at least 60% of the password's characters are distinct."""
         unique = len(profile.char_counts)
         ratio  = unique / profile.length if profile.length else 0.0
-        passed = ratio >= 0.6
+        passed = ratio >= CHAR_UNIQUENESS_MIN_RATIO
         w      = SCORE_WEIGHTS["char_uniqueness"]
         return CriterionResult(
             name       = "Character uniqueness",
@@ -375,8 +378,12 @@ class PasswordAnalyzer:
 
     def _check_no_common_password(self, pw: str) -> CriterionResult:
         """Deduct all points if the password (or a normalised variant) is common."""
-        _norm, _stripped = _normalise_for_lookup(pw)
-        is_common = _norm in COMMON_PASSWORDS or _stripped in COMMON_PASSWORDS
+        _ascii_lower, _norm, _stripped = _normalise_for_lookup(pw)
+        is_common = (
+            _ascii_lower in COMMON_PASSWORDS   # verbatim form: "angel1", "test123"
+            or _norm     in COMMON_PASSWORDS   # leet form:     "p@$$w0rd" → "password"
+            or _stripped in COMMON_PASSWORDS   # stripped form: "!!password!!" → "password"
+        )
         w         = SCORE_WEIGHTS["no_common_password"]
         return CriterionResult(
             name       = "Not a common password",
@@ -462,8 +469,12 @@ class PasswordAnalyzer:
             score      = w if passed else 0,
             max_score  = w,
             detail     = (
-                f"One character (Unicode category {char_category}) appears "
-                f"{most_common_count}x ({ratio:.0%} of password)"
+                f"Max repetition: {most_common_count}x ({ratio:.0%}) — within limits"
+                if passed
+                else (
+                    f"One character (Unicode category {char_category}) appears "
+                    f"{most_common_count}x ({ratio:.0%} of password)"
+                )
             ),
             suggestion = (
                 "Avoid repeating the same character too many times."
