@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+
 import colorama
 from colorama import Fore, Style
 
 colorama.init(autoreset=True)
 
+from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 from .models import PasswordAnalysis
 from .scoring import criteria_summary, score_bar
 from .utils import is_utf_terminal as _is_utf_terminal
@@ -20,7 +22,7 @@ _SEPARATOR_WIDTH:      int = 64
 _CRITERION_NAME_WIDTH: int = 26
 
 # ---------------------------------------------------------------------------
-# Internal colour map
+# Colour map
 # ---------------------------------------------------------------------------
 
 _COLOUR_MAP: dict[str, str] = {
@@ -31,17 +33,21 @@ _COLOUR_MAP: dict[str, str] = {
     "bright_red":   Fore.LIGHTRED_EX,
 }
 
-from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
-
-_missing_map_keys: list[str] = sorted(_VALID_COLOUR_KEYS - frozenset(_COLOUR_MAP))
-if _missing_map_keys:
+_missing_keys = sorted(_VALID_COLOUR_KEYS - frozenset(_COLOUR_MAP))
+if _missing_keys:
     raise ValueError(
         f"_COLOUR_MAP is missing ANSI entries for colour key(s) declared in "
-        f"VALID_COLOUR_KEYS: {_missing_map_keys}. "
+        f"VALID_COLOUR_KEYS: {_missing_keys}. "
         "Add the missing keys to _COLOUR_MAP or update VALID_COLOUR_KEYS "
         "in constants.py."
     )
-del _VALID_COLOUR_KEYS, _missing_map_keys
+del _missing_keys
+
+# ---------------------------------------------------------------------------
+# ANSI helpers
+# ---------------------------------------------------------------------------
+
+_ANSI_ESC: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
 
 def _coloured(text: str, colour_key: str) -> str:
     """Wrap *text* in the ANSI escape codes for *colour_key*."""
@@ -54,32 +60,24 @@ def _coloured(text: str, colour_key: str) -> str:
     return f"{code}{text}{Style.RESET_ALL}"
 
 def _bold(text: str) -> str:
-    """Wrap *text* in the ANSI bright/bold escape code."""
+    """Wrap *text* in the ANSI bold escape code."""
     return f"{Style.BRIGHT}{text}{Style.RESET_ALL}"
 
 def _dim(text: str) -> str:
     """Wrap *text* in the ANSI dim escape code."""
     return f"{Style.DIM}{text}{Style.RESET_ALL}"
 
-# ---------------------------------------------------------------------------
-# ANSI-aware string helpers
-# ---------------------------------------------------------------------------
-
-_ANSI_ESC: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*m")
-
 def _visible_len(s: str) -> int:
-    """Return the *printable* character count of *s*, ignoring ANSI codes."""
+    """Return the printable character count of *s*, ignoring ANSI codes."""
     return len(_ANSI_ESC.sub("", s))
 
 def _ljust_ansi(s: str, width: int) -> str:
     """Left-justify *s* to *width* visible characters, preserving ANSI codes."""
-    pad = width - _visible_len(s)
-    return s + " " * max(pad, 0)
+    return s + " " * max(width - _visible_len(s), 0)
 
 def _rjust_ansi(s: str, width: int) -> str:
     """Right-justify *s* to *width* visible characters, preserving ANSI codes."""
-    pad = width - _visible_len(s)
-    return " " * max(pad, 0) + s
+    return " " * max(width - _visible_len(s), 0) + s
 
 # ---------------------------------------------------------------------------
 # Public rendering functions
@@ -131,6 +129,7 @@ def _print_header(analysis: PasswordAnalysis) -> None:
     )
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
+    """Print the score bar, strength label, entropy, and criteria counts."""
     color   = analysis.strength_color
     score   = analysis.score
     bar     = score_bar(score, width=24)
@@ -148,43 +147,48 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
             f"   Criteria: {analysis.passed_count}/{analysis.total_criteria} passed"
         )
     )
-    if raw_sum > 100:
-        print(
-            _dim(
-                f"  (Criteria total {raw_sum} pts — score is capped at 100)"
-            )
-        )
+    _print_score_overflow_note(raw_sum)
     print()
+
+def _print_score_overflow_note(raw_sum: int) -> None:
+    """Print a note when the raw criteria total exceeds 100 (score is capped)."""
+    if raw_sum > 100:
+        print(_dim(f"  (Criteria total {raw_sum} pts — score is capped at 100)"))
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     """Render the per-criterion results table."""
     utf       = _is_utf_terminal()
     rule_char = "─" if utf else "-"
 
-    col              = _CRITERION_NAME_WIDTH
-    header_criterion = _ljust_ansi(_bold("Criterion"), col)
-    header_score     = _rjust_ansi(_bold("Score"), 8)
-    print(f"  {'':2}  {header_criterion}  {header_score}  {_dim('Detail')}")
+    col          = _CRITERION_NAME_WIDTH
+    header_name  = _ljust_ansi(_bold("Criterion"), col)
+    header_score = _rjust_ansi(_bold("Score"), 8)
+
+    print(f"  {'':2}  {header_name}  {header_score}  {_dim('Detail')}")
     print(_dim("  " + rule_char * (_SEPARATOR_WIDTH - 2)))
 
-    for c in analysis.criteria:
-        if c.skipped:
-            icon       = _coloured("⊘" if utf else "~", "yellow")
-            score_cell = _dim("   —   ")
-        elif c.passed:
-            icon       = _coloured("✔" if utf else "+", "green")
-            score_cell = _coloured(f"+{c.score}", "green")
-        else:
-            icon       = _coloured("✘" if utf else "x", "red")
-            score_cell = _dim(f"+{c.score}/{c.max_score}")
-
-        name_col  = _ljust_ansi(c.name[:col], col)
+    for criterion in analysis.criteria:
+        icon, score_cell = _format_criterion_status(criterion, utf=utf)
+        name_col  = _ljust_ansi(criterion.name[:col], col)
         score_col = _rjust_ansi(score_cell, 8)
-        print(f"  {icon}   {name_col}  {score_col}  {_dim(c.detail)}")
+        print(f"  {icon}   {name_col}  {score_col}  {_dim(criterion.detail)}")
 
     print()
 
+def _format_criterion_status(
+    criterion,  # CriterionResult — avoided circular import via late binding
+    *,
+    utf: bool,
+) -> tuple[str, str]:
+    """Return ``(icon, score_cell)`` strings for a single criterion row."""
+    if criterion.skipped:
+        return _coloured("⊘" if utf else "~", "yellow"), _dim("   —   ")
+    if criterion.passed:
+        return _coloured("✔" if utf else "+", "green"), _coloured(f"+{criterion.score}", "green")
+    return _coloured("✘" if utf else "x", "red"), _dim(f"+{criterion.score}/{criterion.max_score}")
+
 def _print_suggestions(analysis: PasswordAnalysis) -> None:
+    """Print the numbered suggestion list."""
     print(f"  {_coloured(_bold('Suggestions'), 'yellow')}")
     for i, tip in enumerate(analysis.suggestions, start=1):
         print(f"   {_coloured(str(i) + '.', 'yellow')} {tip}")
