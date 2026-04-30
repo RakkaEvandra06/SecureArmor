@@ -7,7 +7,7 @@ from .models import CriterionResult, PasswordAnalysis
 from .utils import is_utf_terminal as _is_utf_terminal
 
 class _CriterionSummary(TypedDict):
-    """Per-criterion entry within an AnalysisSummary."""
+    """JSON-serialisable summary for a single criterion."""
 
     name:      str
     passed:    bool
@@ -39,11 +39,8 @@ def score_bar(score: int, width: int = 20) -> str:
             "Pass a plain int such as score_bar(score, width=20)."
         )
     if width <= 0:
-        raise ValueError(
-            f"score_bar() requires a positive width, got {width!r}."
-        )
+        raise ValueError(f"score_bar() requires a positive width, got {width!r}.")
 
-    # Clamp defensively — score_bar() is public and may be called directly.
     score  = max(0, min(100, score))
     filled = min(width, round(score / 100 * width))
 
@@ -55,7 +52,7 @@ def score_bar(score: int, width: int = 20) -> str:
     return fill_char * filled + empty_char * (width - filled)
 
 def max_possible_score(criteria: Sequence[CriterionResult]) -> int:
-    """Return the sum of ``max_score`` values for all *non-skipped* criteria."""
+    """Return the sum of ``max_score`` values for all non-skipped criteria."""
     return sum(c.max_score for c in criteria if not c.skipped)
 
 def criteria_summary(analysis: PasswordAnalysis) -> AnalysisSummary:
