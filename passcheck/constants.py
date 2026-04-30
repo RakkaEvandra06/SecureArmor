@@ -21,11 +21,12 @@ __all__ = [
     "CHAR_VARIETY_MIN_CLASSES",
 ]
 
-_log = _logging.getLogger(__name__)
+_logger = _logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Scoring weights
 # ---------------------------------------------------------------------------
+
 SCORE_WEIGHTS: dict[str, int] = {
     "length_minimum":      10,
     "length_good":         10,
@@ -44,6 +45,7 @@ SCORE_WEIGHTS: dict[str, int] = {
 
 if not all(v >= 0 for v in SCORE_WEIGHTS.values()):
     raise ValueError("All SCORE_WEIGHTS values must be non-negative.")
+
 _weights_total = sum(SCORE_WEIGHTS.values())
 if _weights_total < 100:
     raise ValueError(
@@ -55,6 +57,7 @@ del _weights_total
 # ---------------------------------------------------------------------------
 # Length thresholds
 # ---------------------------------------------------------------------------
+
 LENGTH_MINIMUM:   int = 8
 LENGTH_GOOD:      int = 12
 LENGTH_EXCELLENT: int = 20
@@ -70,15 +73,19 @@ if not (LENGTH_MINIMUM < LENGTH_GOOD < LENGTH_EXCELLENT < LENGTH_MAXIMUM):
 # ---------------------------------------------------------------------------
 # Entropy (bits)
 # ---------------------------------------------------------------------------
+
 ENTROPY_GOOD_THRESHOLD: float = 50.0
-SHANNON_WEIGHT:         float = 0.4
+SHANNON_WEIGHT:         float = 0.4   # blend factor between pool and Shannon entropy
 
 if not (0.0 < SHANNON_WEIGHT < 1.0):
     raise ValueError(f"SHANNON_WEIGHT must be in (0, 1), got {SHANNON_WEIGHT!r}.")
 
 # ---------------------------------------------------------------------------
-# Repeated characters
+# Repeated-character threshold
 # ---------------------------------------------------------------------------
+
+# A password fails the repetition check when its most frequent character
+# exceeds this fraction of the total length.
 REPEATED_CHAR_RATIO: float = 0.4
 
 if not (0.0 < REPEATED_CHAR_RATIO < 1.0):
@@ -87,18 +94,19 @@ if not (0.0 < REPEATED_CHAR_RATIO < 1.0):
     )
 
 # ---------------------------------------------------------------------------
-# Analyser policy thresholds  (Minor fix: extracted from magic literals)
+# Composition thresholds
 # ---------------------------------------------------------------------------
 
-# Minimum ratio of distinct characters required by _check_char_uniqueness.
+# Minimum ratio of distinct characters for the uniqueness check.
 CHAR_UNIQUENESS_MIN_RATIO: float = 0.6
 
-# Minimum number of character classes required by _check_char_variety.
+# Minimum number of character classes for the variety check.
 CHAR_VARIETY_MIN_CLASSES: int = 3
 
 if not (0.0 < CHAR_UNIQUENESS_MIN_RATIO <= 1.0):
     raise ValueError(
-        f"CHAR_UNIQUENESS_MIN_RATIO must be in (0, 1], got {CHAR_UNIQUENESS_MIN_RATIO!r}."
+        f"CHAR_UNIQUENESS_MIN_RATIO must be in (0, 1], "
+        f"got {CHAR_UNIQUENESS_MIN_RATIO!r}."
     )
 if CHAR_VARIETY_MIN_CLASSES < 2:
     raise ValueError(
@@ -106,8 +114,9 @@ if CHAR_VARIETY_MIN_CLASSES < 2:
     )
 
 # ---------------------------------------------------------------------------
-# Strength bands
+# Strength bands  (threshold, label, colour_key) — sorted descending by threshold
 # ---------------------------------------------------------------------------
+
 STRENGTH_BANDS: list[tuple[int, str, str]] = [
     (80, "Very Strong", "bright_green"),
     (60, "Strong",      "green"),
@@ -130,18 +139,20 @@ if STRENGTH_BANDS[-1][0] != 0:
         f"as its last element. Last entry found: {STRENGTH_BANDS[-1]}."
     )
 
+# Derive the set of valid colour keys directly from the bands definition.
 VALID_COLOUR_KEYS: frozenset[str] = frozenset(colour for _, _, colour in STRENGTH_BANDS)
 
 # ---------------------------------------------------------------------------
 # Special characters
 # ---------------------------------------------------------------------------
+
 SPECIAL_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
 
 # ---------------------------------------------------------------------------
 # Keyboard walk patterns
 # ---------------------------------------------------------------------------
 
-# Internal guard — NOT part of the public API (removed from __all__).
+# Not part of the public API — used only during module initialisation below.
 _KEYBOARD_PATTERN_MIN_LEN: int = 4
 
 _BASE_KEYBOARD_PATTERNS: tuple[str, ...] = (
@@ -162,8 +173,8 @@ _BASE_KEYBOARD_PATTERNS: tuple[str, ...] = (
     "1qaz", "2wsx", "3edc",
 )
 
-# Generate forward + reverse for every base pattern, deduplicate while
-# preserving order, and enforce the minimum length constraint.
+# Expand each base pattern to include its reverse; deduplicate while preserving
+# order; drop any variant shorter than the minimum length.
 KEYBOARD_PATTERNS: tuple[str, ...] = tuple(dict.fromkeys(
     variant
     for base in _BASE_KEYBOARD_PATTERNS
@@ -183,6 +194,7 @@ del _short_patterns
 # ---------------------------------------------------------------------------
 # Common passwords list
 # ---------------------------------------------------------------------------
+
 _BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
     "0.0.0.000", "0.0.000", "0000", "00000",
     "000000", "0000000", "00000000", "000000000",
@@ -351,10 +363,11 @@ _BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
 })
 
 def _load_common_passwords() -> frozenset[str]:
-    """Load common passwords from an external file, or fall back to built-in set."""
+    """Load common passwords from an external file, falling back to the built-in set."""
     data_path = _pathlib.Path(__file__).parent / "data" / "common_passwords.txt"
+
     if not data_path.exists():
-        _log.debug(
+        _logger.debug(
             "Common passwords data file not found at %s. "
             "Using the built-in fallback list (%d entries). "
             "For better coverage, ship data/common_passwords.txt with at least "
@@ -364,18 +377,18 @@ def _load_common_passwords() -> frozenset[str]:
         )
         return _BUILTIN_COMMON_PASSWORDS
 
-    entries: list[str] = []
-    normalised_count: int = 0
-
     try:
         file_text = data_path.read_text("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        _log.warning(
+        _logger.warning(
             "Could not read common passwords from %s (%s). "
             "Falling back to the built-in list (%d entries).",
             data_path, exc, len(_BUILTIN_COMMON_PASSWORDS),
         )
         return _BUILTIN_COMMON_PASSWORDS
+
+    entries: list[str] = []
+    normalised_count   = 0
 
     for raw_line in file_text.splitlines():
         raw_entry = raw_line.strip()
@@ -387,20 +400,19 @@ def _load_common_passwords() -> frozenset[str]:
         entries.append(entry)
 
     if normalised_count:
-        _log.debug(
+        _logger.debug(
             "common_passwords.txt: normalised %d mixed-case entries to lowercase.",
             normalised_count,
         )
 
     loaded = frozenset(entries)
-
     result = loaded | _BUILTIN_COMMON_PASSWORDS
-    _log.debug(
+
+    _logger.debug(
         "Loaded %d entries from %s; %d built-in entries; %d total after merge.",
         len(loaded), data_path, len(_BUILTIN_COMMON_PASSWORDS), len(result),
     )
     return result
-
 
 COMMON_PASSWORDS: frozenset[str] = _load_common_passwords()
 
@@ -415,19 +427,21 @@ if _mixed_case:
 del _mixed_case
 
 # ---------------------------------------------------------------------------
-# Overlap guard — stays at bottom so both collections are fully defined.
+# Overlap guards — kept at the bottom so both collections are fully defined.
 # ---------------------------------------------------------------------------
+
+# Exact-match overlap causes a hidden double-penalty.
 _overlap = frozenset(KEYBOARD_PATTERNS) & COMMON_PASSWORDS
 if _overlap:
     raise ValueError(
-        f"Entries in both KEYBOARD_PATTERNS and COMMON_PASSWORDS: {sorted(_overlap)}. "
+        f"Entries appear in both KEYBOARD_PATTERNS and COMMON_PASSWORDS: "
+        f"{sorted(_overlap)}. "
         "This causes a hidden double-penalty. Remove duplicates from one list."
     )
 del _overlap
 
-# Substring overlaps produce a double penalty on affected inputs.
-# Logged at DEBUG level (not warnings.warn) to avoid polluting CI output
-# and test runners that import the module in fresh interpreter sessions.
+# Substring overlaps are handled by the skip logic; log at DEBUG to avoid
+# polluting CI output when the module is freshly imported.
 _substring_overlaps: list[tuple[str, str]] = [
     (pattern, entry)
     for pattern in KEYBOARD_PATTERNS
@@ -438,7 +452,7 @@ if _substring_overlaps:
     _preview    = _substring_overlaps[:10]
     _extra      = len(_substring_overlaps) - len(_preview)
     _extra_note = f"\n  ...and {_extra} more" if _extra else ""
-    _log.debug(
+    _logger.debug(
         "KEYBOARD_PATTERNS substrings found inside COMMON_PASSWORDS entries "
         "(double penalty handled by skip logic):\n%s%s",
         "\n".join(
