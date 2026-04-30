@@ -17,6 +17,16 @@ class CriterionResult:
     skipped:    bool = False
 
     def __post_init__(self) -> None:
+        self._validate_score_bounds()
+        self._validate_passed_consistency()
+        self._validate_skipped_consistency()
+
+    # ------------------------------------------------------------------
+    # Validators
+    # ------------------------------------------------------------------
+
+    def _validate_score_bounds(self) -> None:
+        """Ensure ``score`` and ``max_score`` are in a valid range."""
         if self.max_score <= 0:
             raise ValueError(
                 f"CriterionResult.max_score must be positive, got {self.max_score!r}."
@@ -30,16 +40,24 @@ class CriterionResult:
                 f"CriterionResult.score ({self.score}) must not exceed "
                 f"max_score ({self.max_score})."
             )
-        if self.passed and self.suggestion:
+
+    def _validate_passed_consistency(self) -> None:
+        """Enforce invariants that apply to passed (non-skipped) criteria."""
+        if not self.passed or self.skipped:
+            return
+
+        if self.suggestion:
             raise ValueError(
                 "A passed CriterionResult must not carry a non-empty suggestion."
             )
-        if self.passed and self.score == 0:
+        if self.score == 0:
             raise ValueError(
                 "A passed CriterionResult must have a positive score; "
                 f"got score=0 with max_score={self.max_score}. "
                 "If the criterion genuinely contributes nothing, mark it as skipped."
             )
+
+        # A failed, non-skipped criterion must score zero.
         if not self.passed and not self.skipped and self.score != 0:
             raise ValueError(
                 f"A failed (non-passed, non-skipped) CriterionResult must have "
@@ -47,33 +65,47 @@ class CriterionResult:
                 "Use skipped=True for unevaluated criteria, or passed=True if "
                 "the criterion was actually satisfied."
             )
-        if self.skipped:
-            if self.passed:
+
+    def _validate_skipped_consistency(self) -> None:
+        """Enforce invariants that apply to skipped criteria."""
+        if not self.skipped:
+            # Enforce the failed-criterion zero-score rule here (not skipped, not passed).
+            if not self.passed and self.score != 0:
                 raise ValueError(
-                    "A skipped CriterionResult cannot also be marked as passed."
+                    f"A failed (non-passed, non-skipped) CriterionResult must have "
+                    f"score=0, got score={self.score!r}. "
+                    "Use skipped=True for unevaluated criteria, or passed=True if "
+                    "the criterion was actually satisfied."
                 )
-            if self.score != 0:
-                raise ValueError(
-                    f"A skipped CriterionResult must have score=0, got {self.score!r}."
-                )
-            if self.suggestion:
-                raise ValueError(
-                    "A skipped CriterionResult must not carry a non-empty suggestion "
-                    "(the criterion that triggered the skip already advises the user)."
-                )
+            return
+
+        if self.passed:
+            raise ValueError(
+                "A skipped CriterionResult cannot also be marked as passed."
+            )
+        if self.score != 0:
+            raise ValueError(
+                f"A skipped CriterionResult must have score=0, got {self.score!r}."
+            )
+        if self.suggestion:
+            raise ValueError(
+                "A skipped CriterionResult must not carry a non-empty suggestion "
+                "(the criterion that triggered the skip already advises the user)."
+            )
+
 
 @dataclass(frozen=True)
 class PasswordAnalysis:
     """Immutable aggregated analysis result for one password."""
-    
-    password_masked:  str
-    password_length:  int
+
+    password_masked: str
+    password_length: int
     score:           int
     strength_label:  str
     strength_color:  str
-    criteria:     tuple[CriterionResult, ...] = field(default=())
-    entropy_bits: float                        = 0.0
-    suggestions:  tuple[str, ...]             = field(default=())
+    criteria:        tuple[CriterionResult, ...] = field(default=())
+    entropy_bits:    float                        = 0.0
+    suggestions:     tuple[str, ...]             = field(default=())
 
     def __post_init__(self) -> None:
         if self.password_length < 0:
