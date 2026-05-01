@@ -17,7 +17,7 @@ from .display import (
 from .models import PasswordAnalysis
 from .scoring import criteria_summary
 
-# Module-level analyzer — stateless, so one shared instance is safe.
+# Module-level analyser — stateless, so a single shared instance is safe.
 _analyzer = PasswordAnalyzer()
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ class _ExitCode(IntEnum):
 # ---------------------------------------------------------------------------
 
 def _warn_insecure_flag() -> None:
-    """Emit a warning to stderr whenever --password is used directly."""
+    """Emit a warning to stderr whenever ``--password`` is used directly."""
     click.echo(
         "Warning: Passing a password via --password exposes it in your shell "
         "history AND in the process list (visible to all users via 'ps aux' or "
@@ -43,14 +43,12 @@ def _warn_insecure_flag() -> None:
     )
 
 def _scrub_argv_password() -> None:
-    """Overwrite the password value in sys.argv with ``***``."""
+    """Overwrite the password value in ``sys.argv`` with ``***``."""
     argv = sys.argv
     for i, arg in enumerate(argv):
-        # Handles: --password SECRET  or  -p SECRET
         if arg in ("--password", "-p") and i + 1 < len(argv):
             argv[i + 1] = "***"
             return
-        # Handles: --password=SECRET
         if arg.startswith("--password="):
             argv[i] = "--password=***"
             return
@@ -135,44 +133,23 @@ def batch(output_json: bool) -> None:
         )
         raise SystemExit(_ExitCode.ERROR)
 
-    if output_json:
-        _batch_json()
-    else:
-        _batch_text()
+    _run_batch(output_json=output_json)
 
 # ---------------------------------------------------------------------------
-# Batch mode helpers
+# Batch helper
 # ---------------------------------------------------------------------------
 
-def _batch_json() -> None:
-    """Stream one JSON object per line (NDJSON) to stdout."""
-    found_any = False
-
-    try:
-        for pw in _stdin_passwords(output_json=True):
-            found_any = True
-            result = criteria_summary(_analyze(pw))
-            _emit_json(result)
-    except KeyboardInterrupt:
-        click.echo("\nInterrupted.", err=True)
-        raise SystemExit(_ExitCode.OK)
-
-    if not found_any:
-        click.echo("Error: No passwords received on stdin.", err=True)
-        raise SystemExit(_ExitCode.ERROR)
-
-
-def _batch_text() -> None:
-    """Stream human-readable analysis blocks to stdout, one per password."""
+def _run_batch(*, output_json: bool) -> None:
+    """Stream analysis results for all passwords arriving on stdin."""
     found_any = False
     first     = True
 
     try:
-        for pw in _stdin_passwords(output_json=False):
+        for pw in _stdin_passwords(output_json=output_json):
             found_any = True
-            if not first:
+            if not output_json and not first:
                 print_separator()
-            _run_analysis(pw, output_json=False)
+            _run_analysis(pw, output_json=output_json)
             first = False
     except KeyboardInterrupt:
         click.echo("\nInterrupted.", err=True)
@@ -183,11 +160,11 @@ def _batch_text() -> None:
         raise SystemExit(_ExitCode.ERROR)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 def _stdin_passwords(*, output_json: bool = False) -> Iterator[str]:
-    """Yield non-blank passwords from stdin one line at a time."""
+    """Yield non-blank passwords from stdin, one per line."""
     for raw_line in sys.stdin.buffer:
         try:
             line = raw_line.decode("utf-8")
@@ -222,7 +199,7 @@ def _run_analysis(password: str, *, output_json: bool) -> None:
         print_analysis_json(analysis)
     else:
         print_analysis(analysis)
-        print()  # trailing blank line owned here, not inside print_analysis
+        print()  # trailing blank line is owned here, not inside print_analysis
 
 def _interactive_loop(*, output_json: bool) -> None:
     """Run the interactive prompt loop until the user quits."""
@@ -264,4 +241,5 @@ def _interactive_loop(*, output_json: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    """Entry point registered in ``pyproject.toml``."""
     cli()
