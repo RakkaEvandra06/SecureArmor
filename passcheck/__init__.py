@@ -1,3 +1,4 @@
+"""PassCheck — Password Strength Analyser."""
 from importlib.metadata import PackageNotFoundError, version as _metadata_version
 
 from .analyzer import PasswordAnalyzer
