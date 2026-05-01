@@ -25,21 +25,20 @@ from .constants import (
 from .models import CriterionResult, PasswordAnalysis
 from .utils import masked_password as _masked_password
 
-# ---------------------------------------------------------------------------
-# Internal sentinel used in the entropy skipped-detail string.
-# ---------------------------------------------------------------------------
-_ENTROPY_SKIPPED_NOTE: str = "- skipped (repetition penalty already applied)"
-
 # Maximum number of distinct keyboard patterns shown in a failure detail line.
 _KEYBOARD_DISPLAY_CAP: int = 3
 
+# Appended to the entropy detail when the check is skipped.
+_ENTROPY_SKIPPED_NOTE: str = "- skipped (repetition penalty already applied)"
+
 # ---------------------------------------------------------------------------
-# Leet-speak substitution table.
+# Leet-speak substitution table
 # ---------------------------------------------------------------------------
+
 _LEET_TABLE: dict[int, str] = str.maketrans({
     "@": "a", "4": "a",
     "3": "e",
-    "1": "l",   # most common leet digit; covers "adm1n", "passw0rd1"
+    "1": "l",   # covers "adm1n", "passw0rd1"
     "!": "i",   # "pass!on" → "passion"
     "|": "i",
     "6": "g",   # "6oogle" → "google"
@@ -49,15 +48,15 @@ _LEET_TABLE: dict[int, str] = str.maketrans({
     "7": "t",
 })
 
-_PUNCTUATION_STRIP: str = r"""0123456789!@#$%^&*()-_=+[]{}|;:,.<>?/\\ \"'`~"""
+# Characters stripped when checking a password against the common-password list.
+_PUNCTUATION_CHARS: str = r"""0123456789!@#$%^&*()-_=+[]{}|;:,.<>?/\\ \"'`~"""
 
 def _normalise_for_lookup(pw: str) -> tuple[str, str, str]:
-    """Return (ascii_lower, leet_normalised, leet_stripped) for COMMON_PASSWORDS lookup."""
+    """Return ``(ascii_lower, leet_normalised, leet_stripped)`` for common-password lookup."""
     nfkd       = unicodedata.normalize("NFKD", pw.lower())
     ascii_pw   = nfkd.encode("ascii", errors="ignore").decode("ascii")
     normalised = ascii_pw.translate(_LEET_TABLE)
-    stripped   = normalised.strip(_PUNCTUATION_STRIP)
-
+    stripped   = normalised.strip(_PUNCTUATION_CHARS)
     return ascii_pw, normalised, stripped
 
 # ---------------------------------------------------------------------------
@@ -76,7 +75,7 @@ class _CharProfile:
     has_non_ascii: bool
     char_counts:   MappingProxyType  # type: ignore[type-arg]
 
-    # Pre-sorted (char, count) pairs; derived in __post_init__.
+    # Pre-sorted (char, count) pairs; populated in __post_init__.
     _sorted_counts: tuple = field(init=False, repr=False, compare=False, default=())
 
     def __post_init__(self) -> None:
@@ -90,7 +89,7 @@ class _CharProfile:
 
     @classmethod
     def from_password(cls, pw: str) -> _CharProfile:
-        """Build a profile from *pw* in a single O(n) pass."""
+        """Build a :class:`_CharProfile` from *pw* in a single O(n) pass."""
         has_upper     = False
         has_lower     = False
         has_digit     = False
@@ -98,13 +97,13 @@ class _CharProfile:
         has_non_ascii = False
         counts: Counter[str] = Counter()
 
-        for c in pw:
-            counts[c] += 1
-            if not has_upper     and c.isupper():        has_upper     = True
-            if not has_lower     and c.islower():        has_lower     = True
-            if not has_digit     and c.isdigit():        has_digit     = True
-            if not has_special   and c in SPECIAL_CHARS: has_special   = True
-            if not has_non_ascii and ord(c) > 127:       has_non_ascii = True
+        for ch in pw:
+            counts[ch] += 1
+            if not has_upper     and ch.isupper():         has_upper     = True
+            if not has_lower     and ch.islower():         has_lower     = True
+            if not has_digit     and ch.isdigit():         has_digit     = True
+            if not has_special   and ch in SPECIAL_CHARS:  has_special   = True
+            if not has_non_ascii and ord(ch) > 127:        has_non_ascii = True
 
         return cls(
             length        = len(pw),
@@ -117,21 +116,20 @@ class _CharProfile:
         )
 
     def most_common(self, n: int = 1) -> tuple:  # type: ignore[type-arg]
-        """Return the *n* most common ``(char, count)`` pairs, descending."""
+        """Return the *n* most common ``(char, count)`` pairs, descending by count."""
         return self._sorted_counts[:n]
 
 def _non_ascii_pool_size(char_counts: MappingProxyType) -> int:  # type: ignore[type-arg]
-    """Return an estimated pool size for the non-ASCII characters in *char_counts*."""
+    """Estimate the alphabet pool size contributed by non-ASCII characters."""
     max_ord = max(
         (ord(c) for c in char_counts if ord(c) > 127),
         default=0,
     )
     if max_ord == 0:
         return 0
-    if max_ord < 0x0250:   # Latin-1 Supplement + Latin Extended-A/B (U+0080–U+024F)
+    if max_ord < 0x0250:   # Latin-1 Supplement + Latin Extended-A/B
         return 128
-    if max_ord < 0x0500:   # IPA Ext, Spacing Modifiers, Combining Marks,
-                            #   Greek, Coptic, Cyrillic (U+0250–U+04FF)
+    if max_ord < 0x0500:   # IPA Ext, Greek, Cyrillic, …
         return 256
     if max_ord < 0x4E00:   # Arabic, Hebrew, misc scripts
         return 512
@@ -142,10 +140,10 @@ def _non_ascii_pool_size(char_counts: MappingProxyType) -> int:  # type: ignore[
 # ---------------------------------------------------------------------------
 
 class PasswordAnalyzer:
-    """Stateless password strength analyser."""
+    """Stateless password-strength analyser."""
 
     def analyze(self, password: str) -> PasswordAnalysis:
-        """Analyse *password* and return a fully populated :class:`PasswordAnalysis`."""
+        """Analyse *password* and return a fully-populated :class:`PasswordAnalysis`."""
         if not password:
             raise ValueError("Password must not be empty.")
         if len(password) > LENGTH_MAXIMUM:
@@ -162,14 +160,13 @@ class PasswordAnalyzer:
             repetition_passed=repetition_result.passed,
             password_length=profile.length,
         )
-
         common_result   = self._check_no_common_password(password)
         keyboard_result = self._check_no_keyboard_pattern(
             password,
             skip=not common_result.passed,
         )
 
-        criteria_list: list[CriterionResult] = [
+        criteria: list[CriterionResult] = [
             self._check_length_minimum(profile),
             self._check_length_good(profile),
             self._check_length_excellent(profile),
@@ -185,169 +182,173 @@ class PasswordAnalyzer:
             entropy_result,
         ]
 
-        score        = min(100, sum(c.score for c in criteria_list))
+        score        = min(100, sum(c.score for c in criteria))
         label, color = self._strength_band(score)
-
-        suggestions = tuple(
+        suggestions  = tuple(
             c.suggestion
-            for c in criteria_list
+            for c in criteria
             if not c.skipped and not c.passed and c.suggestion
         )
 
         return PasswordAnalysis(
-            # Store only the masked form and length — never the raw password.
+            # Store only the masked form — never the raw password.
             password_masked = _masked_password(password),
             password_length = len(password),
             score           = score,
             strength_label  = label,
             strength_color  = color,
-            criteria        = tuple(criteria_list),
+            criteria        = tuple(criteria),
             entropy_bits    = entropy_bits,
             suggestions     = suggestions,
         )
 
     # ------------------------------------------------------------------
-    # Criterion checks
+    # Shared criterion-builder helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_length_criterion(
+        profile:    _CharProfile,
+        key:        str,
+        name:       str,
+        threshold:  int,
+        label:      str,
+        suggestion: str,
+    ) -> CriterionResult:
+        """Build a length-based :class:`CriterionResult` from *profile*."""
+        passed = profile.length >= threshold
+        w      = SCORE_WEIGHTS[key]
+        return CriterionResult(
+            name       = name,
+            passed     = passed,
+            score      = w if passed else 0,
+            max_score  = w,
+            detail     = f"Length is {profile.length} characters ({label} {threshold})",
+            suggestion = suggestion if not passed else "",
+        )
+
+    @staticmethod
+    def _make_presence_criterion(
+        key:            str,
+        name:           str,
+        present:        bool,
+        detail_present: str,
+        detail_absent:  str,
+        suggestion:     str,
+    ) -> CriterionResult:
+        """Build a character-presence :class:`CriterionResult`."""
+        w = SCORE_WEIGHTS[key]
+        return CriterionResult(
+            name       = name,
+            passed     = present,
+            score      = w if present else 0,
+            max_score  = w,
+            detail     = detail_present if present else detail_absent,
+            suggestion = "" if present else suggestion,
+        )
+
+    # ------------------------------------------------------------------
+    # Criterion checks — length
     # ------------------------------------------------------------------
 
     def _check_length_minimum(self, profile: _CharProfile) -> CriterionResult:
-        passed = profile.length >= LENGTH_MINIMUM
-        w      = SCORE_WEIGHTS["length_minimum"]
-        return CriterionResult(
+        return self._make_length_criterion(
+            profile,
+            key        = "length_minimum",
             name       = "Minimum length",
-            passed     = passed,
-            score      = w if passed else 0,
-            max_score  = w,
-            detail     = f"Length is {profile.length} characters (minimum {LENGTH_MINIMUM})",
-            suggestion = f"Use at least {LENGTH_MINIMUM} characters." if not passed else "",
+            threshold  = LENGTH_MINIMUM,
+            label      = "minimum",
+            suggestion = f"Use at least {LENGTH_MINIMUM} characters.",
         )
 
     def _check_length_good(self, profile: _CharProfile) -> CriterionResult:
-        passed = profile.length >= LENGTH_GOOD
-        w      = SCORE_WEIGHTS["length_good"]
-        return CriterionResult(
+        return self._make_length_criterion(
+            profile,
+            key        = "length_good",
             name       = "Recommended length",
-            passed     = passed,
-            score      = w if passed else 0,
-            max_score  = w,
-            detail     = (
-                f"Length is {profile.length} characters "
-                f"(recommended >= {LENGTH_GOOD})"
-            ),
-            suggestion = (
-                f"Aim for at least {LENGTH_GOOD} characters for better security."
-                if not passed else ""
-            ),
+            threshold  = LENGTH_GOOD,
+            label      = "recommended >=",
+            suggestion = f"Aim for at least {LENGTH_GOOD} characters for better security.",
         )
 
     def _check_length_excellent(self, profile: _CharProfile) -> CriterionResult:
-        passed = profile.length >= LENGTH_EXCELLENT
-        w      = SCORE_WEIGHTS["length_excellent"]
-        return CriterionResult(
+        return self._make_length_criterion(
+            profile,
+            key        = "length_excellent",
             name       = "Excellent length",
-            passed     = passed,
-            score      = w if passed else 0,
-            max_score  = w,
-            detail     = (
-                f"Length is {profile.length} characters "
-                f"(excellent >= {LENGTH_EXCELLENT})"
-            ),
+            threshold  = LENGTH_EXCELLENT,
+            label      = "excellent >=",
             suggestion = (
                 f"Consider a passphrase of {LENGTH_EXCELLENT}+ characters "
                 "for maximum security."
-                if not passed else ""
             ),
         )
 
+    # ------------------------------------------------------------------
+    # Criterion checks — character-class presence
+    # ------------------------------------------------------------------
+
     def _check_has_uppercase(self, profile: _CharProfile) -> CriterionResult:
-        w = SCORE_WEIGHTS["has_uppercase"]
-        return CriterionResult(
-            name       = "Uppercase letters",
-            passed     = profile.has_upper,
-            score      = w if profile.has_upper else 0,
-            max_score  = w,
-            detail     = (
-                "Contains uppercase letters"
-                if profile.has_upper
-                else "No uppercase letters found"
-            ),
-            suggestion = (
-                "Add at least one uppercase letter (A-Z)."
-                if not profile.has_upper else ""
-            ),
+        return self._make_presence_criterion(
+            key            = "has_uppercase",
+            name           = "Uppercase letters",
+            present        = profile.has_upper,
+            detail_present = "Contains uppercase letters",
+            detail_absent  = "No uppercase letters found",
+            suggestion     = "Add at least one uppercase letter (A-Z).",
         )
 
     def _check_has_lowercase(self, profile: _CharProfile) -> CriterionResult:
-        w = SCORE_WEIGHTS["has_lowercase"]
-        return CriterionResult(
-            name       = "Lowercase letters",
-            passed     = profile.has_lower,
-            score      = w if profile.has_lower else 0,
-            max_score  = w,
-            detail     = (
-                "Contains lowercase letters"
-                if profile.has_lower
-                else "No lowercase letters found"
-            ),
-            suggestion = (
-                "Add at least one lowercase letter (a-z)."
-                if not profile.has_lower else ""
-            ),
+        return self._make_presence_criterion(
+            key            = "has_lowercase",
+            name           = "Lowercase letters",
+            present        = profile.has_lower,
+            detail_present = "Contains lowercase letters",
+            detail_absent  = "No lowercase letters found",
+            suggestion     = "Add at least one lowercase letter (a-z).",
         )
 
     def _check_has_digit(self, profile: _CharProfile) -> CriterionResult:
-        w = SCORE_WEIGHTS["has_digit"]
-        return CriterionResult(
-            name       = "Digits",
-            passed     = profile.has_digit,
-            score      = w if profile.has_digit else 0,
-            max_score  = w,
-            detail     = (
-                "Contains at least one digit"
-                if profile.has_digit
-                else "No digits found"
-            ),
-            suggestion = (
-                "Add at least one number (0-9)."
-                if not profile.has_digit else ""
-            ),
+        return self._make_presence_criterion(
+            key            = "has_digit",
+            name           = "Digits",
+            present        = profile.has_digit,
+            detail_present = "Contains at least one digit",
+            detail_absent  = "No digits found",
+            suggestion     = "Add at least one number (0-9).",
         )
 
     def _check_has_special(self, profile: _CharProfile) -> CriterionResult:
-        w = SCORE_WEIGHTS["has_special"]
-        return CriterionResult(
-            name       = "Special characters",
-            passed     = profile.has_special,
-            score      = w if profile.has_special else 0,
-            max_score  = w,
-            detail     = (
-                "Contains special characters"
-                if profile.has_special
-                else "No special characters found"
-            ),
-            suggestion = (
-                "Add special characters such as: ! @ # $ % ^ & *"
-                if not profile.has_special else ""
-            ),
+        return self._make_presence_criterion(
+            key            = "has_special",
+            name           = "Special characters",
+            present        = profile.has_special,
+            detail_present = "Contains special characters",
+            detail_absent  = "No special characters found",
+            suggestion     = "Add special characters such as: ! @ # $ % ^ & *",
         )
 
+    # ------------------------------------------------------------------
+    # Criterion checks — composition quality
+    # ------------------------------------------------------------------
+
     def _check_char_variety(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if the password uses at least 3 of the 5 character classes."""
-        classes = sum((
+        """Award points when the password uses at least 3 of the 5 character classes."""
+        class_count = sum((
             profile.has_upper,
             profile.has_lower,
             profile.has_digit,
             profile.has_special,
             profile.has_non_ascii,
         ))
-        passed = classes >= CHAR_VARIETY_MIN_CLASSES
+        passed = class_count >= CHAR_VARIETY_MIN_CLASSES
         w      = SCORE_WEIGHTS["char_variety"]
         return CriterionResult(
             name       = "Character variety",
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
-            detail     = f"Uses {classes}/5 character classes",
+            detail     = f"Uses {class_count}/5 character classes",
             suggestion = (
                 "Mix uppercase, lowercase, digits, special characters, "
                 "or non-ASCII characters."
@@ -356,35 +357,36 @@ class PasswordAnalyzer:
         )
 
     def _check_char_uniqueness(self, profile: _CharProfile) -> CriterionResult:
-        """Award points if at least 60% of the password's characters are distinct."""
-        unique = len(profile.char_counts)
-        ratio  = unique / profile.length if profile.length else 0.0
-        passed = ratio >= CHAR_UNIQUENESS_MIN_RATIO
-        w      = SCORE_WEIGHTS["char_uniqueness"]
+        """Award points when at least 60 % of the password's characters are distinct."""
+        unique_count = len(profile.char_counts)
+        ratio        = unique_count / profile.length if profile.length else 0.0
+        passed       = ratio >= CHAR_UNIQUENESS_MIN_RATIO
+        w            = SCORE_WEIGHTS["char_uniqueness"]
         return CriterionResult(
             name       = "Character uniqueness",
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
-            detail     = (
-                f"{unique} unique chars out of {profile.length} ({ratio:.0%})"
-            ),
+            detail     = f"{unique_count} unique chars out of {profile.length} ({ratio:.0%})",
             suggestion = (
-                "Avoid repetitive patterns — use a greater variety of distinct "
-                "characters."
+                "Avoid repetitive patterns — use a greater variety of distinct characters."
                 if not passed else ""
             ),
         )
 
+    # ------------------------------------------------------------------
+    # Criterion checks — blacklist / pattern detection
+    # ------------------------------------------------------------------
+
     def _check_no_common_password(self, pw: str) -> CriterionResult:
-        """Deduct all points if the password (or a normalised variant) is common."""
-        _ascii_lower, _norm, _stripped = _normalise_for_lookup(pw)
+        """Fail if the password (or a normalised variant) appears in the common-password list."""
+        ascii_lower, normalised, stripped = _normalise_for_lookup(pw)
         is_common = (
-            _ascii_lower in COMMON_PASSWORDS   # verbatim form: "angel1", "test123"
-            or _norm     in COMMON_PASSWORDS   # leet form:     "p@$$w0rd" → "password"
-            or _stripped in COMMON_PASSWORDS   # stripped form: "!!password!!" → "password"
+            ascii_lower   in COMMON_PASSWORDS   # verbatim:  "angel1"
+            or normalised in COMMON_PASSWORDS   # leet form: "p@$$w0rd" → "password"
+            or stripped   in COMMON_PASSWORDS   # stripped:  "!!password!!" → "password"
         )
-        w         = SCORE_WEIGHTS["no_common_password"]
+        w = SCORE_WEIGHTS["no_common_password"]
         return CriterionResult(
             name       = "Not a common password",
             passed     = not is_common,
@@ -408,7 +410,7 @@ class PasswordAnalyzer:
         *,
         skip: bool = False,
     ) -> CriterionResult:
-        """Deduct all points if the password contains a recognisable keyboard walk."""
+        """Fail if the password contains a recognisable keyboard walk."""
         w = SCORE_WEIGHTS["no_keyboard_pattern"]
 
         if skip:
@@ -423,14 +425,12 @@ class PasswordAnalyzer:
             )
 
         pw_lower = pw.lower()
-        found: list[str] = [
-            pattern for pattern in KEYBOARD_PATTERNS if pattern in pw_lower
-        ]
+        found    = [p for p in KEYBOARD_PATTERNS if p in pw_lower]
+        passed   = not found
 
-        passed        = not found
-        display_found = found[:_KEYBOARD_DISPLAY_CAP]
-        extra         = len(found) - len(display_found)
-        suffix        = f" (+{extra} more)" if extra else ""
+        display  = found[:_KEYBOARD_DISPLAY_CAP]
+        extra    = len(found) - len(display)
+        suffix   = f" (+{extra} more)" if extra else ""
 
         return CriterionResult(
             name       = "No keyboard patterns",
@@ -438,7 +438,7 @@ class PasswordAnalyzer:
             score      = w if passed else 0,
             max_score  = w,
             detail     = (
-                f"Keyboard patterns detected: {', '.join(display_found)}{suffix}"
+                f"Keyboard patterns detected: {', '.join(display)}{suffix}"
                 if not passed
                 else "No obvious keyboard patterns detected"
             ),
@@ -449,7 +449,7 @@ class PasswordAnalyzer:
         )
 
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
-        """Deduct all points if a single character dominates the password."""
+        """Fail if a single character dominates more than the allowed ratio."""
         if profile.length == 0:
             raise RuntimeError(
                 "_check_no_repeated_chars() reached with an empty profile — "
@@ -457,11 +457,11 @@ class PasswordAnalyzer:
             )
 
         w = SCORE_WEIGHTS["no_repeated_chars"]
-        most_common_char, most_common_count = profile.most_common(1)[0]
-        ratio  = most_common_count / profile.length
+        top_char, top_count = profile.most_common(1)[0]
+        ratio  = top_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
 
-        char_category = unicodedata.category(most_common_char)
+        char_category = unicodedata.category(top_char)
 
         return CriterionResult(
             name       = "No excessive repetition",
@@ -469,11 +469,11 @@ class PasswordAnalyzer:
             score      = w if passed else 0,
             max_score  = w,
             detail     = (
-                f"Max repetition: {most_common_count}x ({ratio:.0%}) — within limits"
+                f"Max repetition: {top_count}x ({ratio:.0%}) — within limits"
                 if passed
                 else (
                     f"One character (Unicode category {char_category}) appears "
-                    f"{most_common_count}x ({ratio:.0%} of password)"
+                    f"{top_count}x ({ratio:.0%} of password)"
                 )
             ),
             suggestion = (
@@ -489,7 +489,7 @@ class PasswordAnalyzer:
         repetition_passed: bool,
         password_length:   int,
     ) -> CriterionResult:
-        """Award bonus points if estimated entropy meets the threshold."""
+        """Award bonus points when estimated entropy meets the threshold."""
         w = SCORE_WEIGHTS["entropy_bonus"]
 
         if not repetition_passed:
@@ -499,22 +499,14 @@ class PasswordAnalyzer:
                 skipped    = True,
                 score      = 0,
                 max_score  = w,
-                detail     = (
-                    f"Estimated entropy: {entropy_bits:.1f} bits "
-                    f"{_ENTROPY_SKIPPED_NOTE}"
-                ),
+                detail     = f"Estimated entropy: {entropy_bits:.1f} bits {_ENTROPY_SKIPPED_NOTE}",
                 suggestion = "",
             )
 
-        # Append a length hint when a short password limits entropy more than
-        # character variety does, so users prioritise length first.
-        length_note = (
-            " — increase length first"
-            if password_length < LENGTH_GOOD
-            else ""
-        )
+        # Hint users to prioritise length when it is the binding constraint.
+        length_note = " — increase length first" if password_length < LENGTH_GOOD else ""
+        passed      = entropy_bits >= ENTROPY_GOOD_THRESHOLD
 
-        passed = entropy_bits >= ENTROPY_GOOD_THRESHOLD
         return CriterionResult(
             name       = "Entropy",
             passed     = passed,
@@ -531,42 +523,37 @@ class PasswordAnalyzer:
         )
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Static helpers
     # ------------------------------------------------------------------
 
     @staticmethod
     def _calculate_entropy(profile: _CharProfile) -> float:
-        """Estimate password entropy (bits) from pool size and character distribution."""
+        """Estimate password entropy (bits) via a pool-size / Shannon blend."""
         if profile.length == 0:
             return 0.0
 
-        # Pool-based (upper-bound) entropy per character.
         pool = 0
         if profile.has_lower:     pool += 26
         if profile.has_upper:     pool += 26
         if profile.has_digit:     pool += 10
         if profile.has_special:   pool += len(SPECIAL_CHARS)
-        if profile.has_non_ascii:
-            pool += _non_ascii_pool_size(profile.char_counts)
+        if profile.has_non_ascii: pool += _non_ascii_pool_size(profile.char_counts)
 
         if pool == 0:
             return 0.0
 
         pool_entropy_per_char = math.log2(pool)
 
-        # Shannon entropy per character (distribution-aware).
         total = profile.length
         shannon_per_char = -sum(
             (count / total) * math.log2(count / total)
             for count in profile.char_counts.values()
         )
 
-        # Weighted blend.
         entropy_per_char = (
             (1.0 - SHANNON_WEIGHT) * pool_entropy_per_char
             + SHANNON_WEIGHT       * shannon_per_char
         )
-
         return max(0.0, entropy_per_char * profile.length)
 
     @staticmethod
