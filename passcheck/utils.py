@@ -3,9 +3,7 @@ from __future__ import annotations
 import codecs
 import sys
 
-# ---------------------------------------------------------------------------
-# Complete set of codec *canonical* names that indicate a UTF-capable stream.
-# ---------------------------------------------------------------------------
+# Complete set of codec canonical names that indicate a UTF-capable stream.
 _UTF_CODEC_NAMES: frozenset[str] = frozenset({
     "utf-8",
     "utf-8-sig",
@@ -19,11 +17,11 @@ _UTF_CODEC_NAMES: frozenset[str] = frozenset({
 
 def is_utf_terminal() -> bool:
     """Return ``True`` when stdout appears to accept UTF-8 output."""
-    enc = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
+    encoding = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
     try:
-        return codecs.lookup(enc).name in _UTF_CODEC_NAMES
+        return codecs.lookup(encoding).name in _UTF_CODEC_NAMES
     except LookupError:
-        return True   # safe default: prefer Unicode, let the terminal decide
+        return True  # safe default: prefer Unicode and let the terminal decide
 
 def masked_password(password: str) -> str:
     """Return a display-safe masked version of *password*."""
