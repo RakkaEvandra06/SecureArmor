@@ -88,7 +88,7 @@ include = ["passcheck*"]
 exclude = ["tests*", "docs*"]
 
 [tool.setuptools.package-data]
-passcheck = ["py.typed"]
+passcheck = ["py.typed", "data/common_passwords.txt"]
 
 [tool.black]
 line-length    = 88
@@ -193,9 +193,6 @@ fail_under   = 80
 
 [tool.bandit]
 exclude_dirs = ["tests", "docs"]
-skids        = ["B101", "B311", "B403"]
+skips        = ["B101", "B311", "B403"]
 severity     = "medium"
 confidence   = "medium"
-
-[tool.safety]
-ignore = ["12345"]  # Add any specific vulnerability IDs to ignore if needed
