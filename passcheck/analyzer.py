@@ -38,26 +38,36 @@ _ENTROPY_SKIPPED_NOTE: str = "- skipped (repetition penalty already applied)"
 _LEET_TABLE: dict[int, str] = str.maketrans({
     "@": "a", "4": "a",
     "3": "e",
-    "1": "l",   # covers "adm1n", "passw0rd1"
-    "!": "i",   # "pass!on" → "passion"
+    "1": "i",   # adm1n → admin, m@tr1x → matrix
+    "!": "i",   # pass!on → passion
     "|": "i",
-    "6": "g",   # "6oogle" → "google"
-    "8": "b",   # "8ball" → "bball"
+    "6": "g",   # 6oogle → google
+    "8": "b",   # 8ball  → bball
     "0": "o",
     "5": "s", "$": "s",
     "7": "t",
 })
 
-# Characters stripped when checking a password against the common-password list.
-_PUNCTUATION_CHARS: str = r"""0123456789!@#$%^&*()-_=+[]{}|;:,.<>?/\\ \"'`~"""
+_PUNCTUATION_CHARS: str = (
+    "!@#$%^&*()-_=+[]{}|;:,.<>?/"
+    "\\"   # backslash
+    '"'    # double-quote
+    "'`~"
+)
 
-def _normalise_for_lookup(pw: str) -> tuple[str, str, str]:
-    """Return ``(ascii_lower, leet_normalised, leet_stripped)`` for common-password lookup."""
-    nfkd       = unicodedata.normalize("NFKD", pw.lower())
-    ascii_pw   = nfkd.encode("ascii", errors="ignore").decode("ascii")
-    normalised = ascii_pw.translate(_LEET_TABLE)
-    stripped   = normalised.strip(_PUNCTUATION_CHARS)
-    return ascii_pw, normalised, stripped
+#   '!!password!!'  →  strip  →  'password'   →  leet  →  'password'  ✓
+#   'adm1n'         →  strip  →  'adm1n'      →  leet  →  'admin'     ✓
+#   'p@$$w0rd'      →  strip  →  'p@$$w0rd'   →  leet  →  'password'  ✓
+#   '@dmin'         →  leet (no strip first)   →  'admin'             ✓
+def _normalise_for_lookup(pw: str) -> tuple[str, str, str, str]:
+    """Return four lookup keys for common-password detection."""
+    nfkd     = unicodedata.normalize("NFKD", pw.lower())
+    ascii_pw = nfkd.encode("ascii", errors="ignore").decode("ascii")
+    # Strip punctuation on the raw ASCII form first, then leet-substitute.
+    stripped   = ascii_pw.strip(_PUNCTUATION_CHARS)
+    normalised = stripped.translate(_LEET_TABLE)
+    leet_full  = ascii_pw.translate(_LEET_TABLE)
+    return ascii_pw, normalised, stripped, leet_full
 
 # ---------------------------------------------------------------------------
 # Character profile
@@ -67,16 +77,20 @@ def _normalise_for_lookup(pw: str) -> tuple[str, str, str]:
 class _CharProfile:
     """Immutable character-level profile of a password."""
 
-    length:        int
-    has_upper:     bool
-    has_lower:     bool
-    has_digit:     bool
-    has_special:   bool
-    has_non_ascii: bool
-    char_counts:   MappingProxyType  # type: ignore[type-arg]
+    length:          int
+    has_upper:       bool
+    has_lower:       bool
+    has_digit:       bool
+    has_special:     bool
+    has_non_ascii:   bool
+    has_ascii_upper: bool
+    has_ascii_lower: bool
+    char_counts:     MappingProxyType[str, int]
 
     # Pre-sorted (char, count) pairs; populated in __post_init__.
-    _sorted_counts: tuple = field(init=False, repr=False, compare=False, default=())
+    _sorted_counts: tuple[tuple[str, int], ...] = field(
+        init=False, repr=False, compare=False, default=()
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -90,36 +104,44 @@ class _CharProfile:
     @classmethod
     def from_password(cls, pw: str) -> _CharProfile:
         """Build a :class:`_CharProfile` from *pw* in a single O(n) pass."""
-        has_upper     = False
-        has_lower     = False
-        has_digit     = False
-        has_special   = False
-        has_non_ascii = False
+        has_upper       = False
+        has_lower       = False
+        has_digit       = False
+        has_special     = False
+        has_non_ascii   = False
+        has_ascii_upper = False
+        has_ascii_lower = False
         counts: Counter[str] = Counter()
 
         for ch in pw:
             counts[ch] += 1
-            if not has_upper     and ch.isupper():         has_upper     = True
-            if not has_lower     and ch.islower():         has_lower     = True
-            if not has_digit     and ch.isdigit():         has_digit     = True
-            if not has_special   and ch in SPECIAL_CHARS:  has_special   = True
-            if not has_non_ascii and ord(ch) > 127:        has_non_ascii = True
+            if not has_upper       and ch.isupper():         has_upper       = True
+            if not has_lower       and ch.islower():         has_lower       = True
+            if not has_digit       and ch.isdigit():         has_digit       = True
+            if not has_special     and ch in SPECIAL_CHARS:  has_special     = True
+            if not has_non_ascii   and ord(ch) > 127:        has_non_ascii   = True
+            if not has_ascii_upper and ch.isupper() and ord(ch) <= 127:
+                has_ascii_upper = True
+            if not has_ascii_lower and ch.islower() and ord(ch) <= 127:
+                has_ascii_lower = True
 
         return cls(
-            length        = len(pw),
-            has_upper     = has_upper,
-            has_lower     = has_lower,
-            has_digit     = has_digit,
-            has_special   = has_special,
-            has_non_ascii = has_non_ascii,
-            char_counts   = MappingProxyType(dict(counts)),
+            length          = len(pw),
+            has_upper       = has_upper,
+            has_lower       = has_lower,
+            has_digit       = has_digit,
+            has_special     = has_special,
+            has_non_ascii   = has_non_ascii,
+            has_ascii_upper = has_ascii_upper,
+            has_ascii_lower = has_ascii_lower,
+            char_counts     = MappingProxyType(dict(counts)),
         )
 
-    def most_common(self, n: int = 1) -> tuple:  # type: ignore[type-arg]
+    def most_common(self, n: int = 1) -> tuple[tuple[str, int], ...]:
         """Return the *n* most common ``(char, count)`` pairs, descending by count."""
         return self._sorted_counts[:n]
 
-def _non_ascii_pool_size(char_counts: MappingProxyType) -> int:  # type: ignore[type-arg]
+def _non_ascii_pool_size(char_counts: MappingProxyType[str, int]) -> int:
     """Estimate the alphabet pool size contributed by non-ASCII characters."""
     max_ord = max(
         (ord(c) for c in char_counts if ord(c) > 127),
@@ -257,7 +279,7 @@ class PasswordAnalyzer:
             key        = "length_minimum",
             name       = "Minimum length",
             threshold  = LENGTH_MINIMUM,
-            label      = "minimum",
+            label      = "minimum >=",
             suggestion = f"Use at least {LENGTH_MINIMUM} characters.",
         )
 
@@ -292,9 +314,9 @@ class PasswordAnalyzer:
         return self._make_presence_criterion(
             key            = "has_uppercase",
             name           = "Uppercase letters",
-            present        = profile.has_upper,
-            detail_present = "Contains uppercase letters",
-            detail_absent  = "No uppercase letters found",
+            present        = profile.has_ascii_upper,
+            detail_present = "Contains ASCII uppercase letters (A-Z)",
+            detail_absent  = "No ASCII uppercase letters (A-Z) found",
             suggestion     = "Add at least one uppercase letter (A-Z).",
         )
 
@@ -302,9 +324,9 @@ class PasswordAnalyzer:
         return self._make_presence_criterion(
             key            = "has_lowercase",
             name           = "Lowercase letters",
-            present        = profile.has_lower,
-            detail_present = "Contains lowercase letters",
-            detail_absent  = "No lowercase letters found",
+            present        = profile.has_ascii_lower,
+            detail_present = "Contains ASCII lowercase letters (a-z)",
+            detail_absent  = "No ASCII lowercase letters (a-z) found",
             suggestion     = "Add at least one lowercase letter (a-z).",
         )
 
@@ -335,8 +357,8 @@ class PasswordAnalyzer:
     def _check_char_variety(self, profile: _CharProfile) -> CriterionResult:
         """Award points when the password uses at least 3 of the 5 character classes."""
         class_count = sum((
-            profile.has_upper,
-            profile.has_lower,
+            profile.has_ascii_upper,
+            profile.has_ascii_lower,
             profile.has_digit,
             profile.has_special,
             profile.has_non_ascii,
@@ -380,11 +402,12 @@ class PasswordAnalyzer:
 
     def _check_no_common_password(self, pw: str) -> CriterionResult:
         """Fail if the password (or a normalised variant) appears in the common-password list."""
-        ascii_lower, normalised, stripped = _normalise_for_lookup(pw)
+        ascii_lower, normalised, stripped, leet_full = _normalise_for_lookup(pw)
         is_common = (
-            ascii_lower   in COMMON_PASSWORDS   # verbatim:  "angel1"
-            or normalised in COMMON_PASSWORDS   # leet form: "p@$$w0rd" → "password"
-            or stripped   in COMMON_PASSWORDS   # stripped:  "!!password!!" → "password"
+            ascii_lower in COMMON_PASSWORDS   # verbatim:         "angel1"
+            or normalised  in COMMON_PASSWORDS # strip + leet:     "adm1n"      → "admin"
+            or stripped    in COMMON_PASSWORDS # edge-stripped:    "!!password!!" → "password"
+            or leet_full   in COMMON_PASSWORDS # leet (no strip):  "@dmin"      → "admin"
         )
         w = SCORE_WEIGHTS["no_common_password"]
         return CriterionResult(
@@ -449,7 +472,7 @@ class PasswordAnalyzer:
         )
 
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
-        """Fail if a single character dominates more than the allowed ratio."""
+        """Fail if a single character occupies 40 % or more of the password."""
         if profile.length == 0:
             raise RuntimeError(
                 "_check_no_repeated_chars() reached with an empty profile — "
@@ -461,8 +484,6 @@ class PasswordAnalyzer:
         ratio  = top_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
 
-        char_category = unicodedata.category(top_char)
-
         return CriterionResult(
             name       = "No excessive repetition",
             passed     = passed,
@@ -472,8 +493,8 @@ class PasswordAnalyzer:
                 f"Max repetition: {top_count}x ({ratio:.0%}) — within limits"
                 if passed
                 else (
-                    f"One character (Unicode category {char_category}) appears "
-                    f"{top_count}x ({ratio:.0%} of password)"
+                    f"Top character appears {top_count}x "
+                    f"({ratio:.0%} of password) — exceeds limit"
                 )
             ),
             suggestion = (
@@ -533,11 +554,11 @@ class PasswordAnalyzer:
             return 0.0
 
         pool = 0
-        if profile.has_lower:     pool += 26
-        if profile.has_upper:     pool += 26
-        if profile.has_digit:     pool += 10
-        if profile.has_special:   pool += len(SPECIAL_CHARS)
-        if profile.has_non_ascii: pool += _non_ascii_pool_size(profile.char_counts)
+        if profile.has_ascii_lower: pool += 26
+        if profile.has_ascii_upper: pool += 26
+        if profile.has_digit:       pool += 10
+        if profile.has_special:     pool += len(SPECIAL_CHARS)
+        if profile.has_non_ascii:   pool += _non_ascii_pool_size(profile.char_counts)
 
         if pool == 0:
             return 0.0
