@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import TYPE_CHECKING
 
 import colorama
 from colorama import Fore, Style
@@ -12,6 +13,9 @@ from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 from .models import PasswordAnalysis
 from .scoring import criteria_summary, score_bar
 from .utils import is_utf_terminal as _is_utf_terminal
+
+if TYPE_CHECKING:
+    from .models import CriterionResult
 
 # ---------------------------------------------------------------------------
 # Layout constants
@@ -110,7 +114,7 @@ def print_banner() -> None:
         + _coloured(v, "bright_green")
     )
     print(_coloured(bl + h * _BANNER_WIDTH + br, "bright_green"))
-    print(_dim("  Type a password to analyse it, or 'quit'/'exit' to leave.\n"))
+    print(_dim("  Type a password to analyse it, or press Ctrl-D / Ctrl-C to quit.\n"))
 
 def print_separator() -> None:
     """Print a horizontal rule between analysis blocks."""
@@ -130,10 +134,9 @@ def _print_header(analysis: PasswordAnalysis) -> None:
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
     """Print the score bar, strength label, entropy, and criteria counts."""
-    color   = analysis.strength_color
-    score   = analysis.score
-    bar     = score_bar(score, width=24)
-    raw_sum = sum(c.score for c in analysis.criteria)
+    color = analysis.strength_color
+    score = analysis.score
+    bar   = score_bar(score, width=24)
 
     print()
     print(
@@ -147,13 +150,7 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
             f"   Criteria: {analysis.passed_count}/{analysis.total_criteria} passed"
         )
     )
-    _print_score_overflow_note(raw_sum)
     print()
-
-def _print_score_overflow_note(raw_sum: int) -> None:
-    """Print a note when the raw criteria total exceeds 100 (score is capped)."""
-    if raw_sum > 100:
-        print(_dim(f"  (Criteria total {raw_sum} pts — score is capped at 100)"))
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     """Render the per-criterion results table."""
@@ -176,7 +173,7 @@ def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     print()
 
 def _format_criterion_status(
-    criterion,  # CriterionResult — avoided circular import via late binding
+    criterion: CriterionResult,
     *,
     utf: bool,
 ) -> tuple[str, str]:
