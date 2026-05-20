@@ -9,12 +9,13 @@ from .utils import is_utf_terminal as _is_utf_terminal
 class _CriterionSummary(TypedDict):
     """JSON-serialisable summary for a single criterion."""
 
-    name:      str
-    passed:    bool
-    skipped:   bool
-    score:     int
-    max_score: int
-    detail:    str
+    name:       str
+    passed:     bool
+    skipped:    bool
+    score:      int
+    max_score:  int
+    detail:     str
+    suggestion: str
 
 class AnalysisSummary(TypedDict):
     """Full JSON-serialisable summary produced by :func:`criteria_summary`."""
@@ -66,12 +67,13 @@ def criteria_summary(analysis: PasswordAnalysis) -> AnalysisSummary:
         suggestions  = list(analysis.suggestions),
         criteria     = [
             _CriterionSummary(
-                name      = c.name,
-                passed    = c.passed,
-                skipped   = c.skipped,
-                score     = c.score,
-                max_score = c.max_score,
-                detail    = c.detail,
+                name       = c.name,
+                passed     = c.passed,
+                skipped    = c.skipped,
+                score      = c.score,
+                max_score  = c.max_score,
+                detail     = c.detail,
+                suggestion = c.suggestion,
             )
             for c in analysis.criteria
         ],
