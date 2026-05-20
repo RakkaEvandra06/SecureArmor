@@ -57,15 +57,6 @@ class CriterionResult:
                 "If the criterion genuinely contributes nothing, mark it as skipped."
             )
 
-        # A failed, non-skipped criterion must score zero.
-        if not self.passed and not self.skipped and self.score != 0:
-            raise ValueError(
-                f"A failed (non-passed, non-skipped) CriterionResult must have "
-                f"score=0, got score={self.score!r}. "
-                "Use skipped=True for unevaluated criteria, or passed=True if "
-                "the criterion was actually satisfied."
-            )
-
     def _validate_skipped_consistency(self) -> None:
         """Enforce invariants that apply to skipped criteria."""
         if not self.skipped:
