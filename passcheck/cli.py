@@ -15,7 +15,6 @@ from .display import (
     print_separator,
 )
 from .models import PasswordAnalysis
-from .scoring import criteria_summary
 
 # Module-level analyser — stateless, so a single shared instance is safe.
 _analyzer = PasswordAnalyzer()
@@ -57,7 +56,7 @@ def _scrub_argv_password() -> None:
 # JSON output helper
 # ---------------------------------------------------------------------------
 
-def _emit_json(obj: dict) -> None:  # type: ignore[type-arg]
+def _emit_json(obj: dict[str, object]) -> None:
     """Write *obj* as a single compact JSON line (NDJSON-compatible)."""
     print(json.dumps(obj))
 
@@ -216,13 +215,6 @@ def _interactive_loop(*, output_json: bool) -> None:
             if not output_json:
                 print("\n  Goodbye!\n")
             raise SystemExit(_ExitCode.OK)
-
-        if pw.lower() in {"quit", "exit", "q"}:
-            if output_json:
-                _emit_json({"event": "exit"})
-            else:
-                print("\n  Goodbye!\n")
-            break
 
         if not pw:
             if output_json:
