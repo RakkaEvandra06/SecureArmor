@@ -23,9 +23,19 @@ def is_utf_terminal() -> bool:
     except LookupError:
         return True  # safe default: prefer Unicode and let the terminal decide
 
+_MASK_FULL_BELOW: int = 6
+
+_MASK_SINGLE_EDGE_BELOW: int = 8
+
 def masked_password(password: str) -> str:
     """Return a display-safe masked version of *password*."""
     length = len(password)
-    if length <= 2:
+    if length < _MASK_FULL_BELOW:
+        # Fully mask very short passwords — revealing any character would expose
+        # too large a fraction (e.g. 2/4 = 50 %) for an already-weak password.
         return "*" * length
+    if length < _MASK_SINGLE_EDGE_BELOW:
+        # Show only the first character; the remainder is masked.
+        return password[0] + "*" * (length - 1)
+    # Standard display: first and last characters visible.
     return password[0] + "*" * (length - 2) + password[-1]
