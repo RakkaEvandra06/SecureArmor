@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging as _logging
 import pathlib as _pathlib
+from types import MappingProxyType
 
 __all__ = [
     "SCORE_WEIGHTS",
@@ -27,32 +28,61 @@ _logger = _logging.getLogger(__name__)
 # Scoring weights
 # ---------------------------------------------------------------------------
 
-SCORE_WEIGHTS: dict[str, int] = {
-    "length_minimum":      10,
-    "length_good":         10,
-    "length_excellent":     5,
-    "has_uppercase":       10,
-    "has_lowercase":        5,
-    "has_digit":           10,
-    "has_special":         15,
-    "char_variety":        10,
-    "char_uniqueness":      5,
-    "no_common_password":  10,
-    "no_keyboard_pattern": 10,
-    "no_repeated_chars":    5,
-    "entropy_bonus":       10,
-}
+SCORE_WEIGHTS: MappingProxyType[str, int] = MappingProxyType({
+    "length_minimum":       9,
+    "length_good":          9,
+    "length_excellent":     4,
+    "has_uppercase":        9,
+    "has_lowercase":        4,
+    "has_digit":            9,
+    "has_special":         13,
+    "char_variety":         9,
+    "char_uniqueness":      4,
+    "no_common_password":   9,
+    "no_keyboard_pattern":  9,
+    "no_repeated_chars":    4,
+    "entropy_bonus":        8,
+})
+# Total: 9+9+4+9+4+9+13+9+4+9+9+4+8 = 100
 
 if not all(v >= 0 for v in SCORE_WEIGHTS.values()):
     raise ValueError("All SCORE_WEIGHTS values must be non-negative.")
 
 _weights_total = sum(SCORE_WEIGHTS.values())
-if _weights_total < 100:
+if _weights_total != 100:
     raise ValueError(
-        f"SCORE_WEIGHTS sum to {_weights_total}, must be >= 100 "
-        "so that a perfect password can reach a score of 100."
+        f"SCORE_WEIGHTS must sum to exactly 100 so that a perfect password "
+        f"reaches a score of exactly 100. Current sum: {_weights_total}."
     )
 del _weights_total
+
+_EXPECTED_WEIGHT_KEYS: frozenset[str] = frozenset({
+    "length_minimum",
+    "length_good",
+    "length_excellent",
+    "has_uppercase",
+    "has_lowercase",
+    "has_digit",
+    "has_special",
+    "char_variety",
+    "char_uniqueness",
+    "no_common_password",
+    "no_keyboard_pattern",
+    "no_repeated_chars",
+    "entropy_bonus",
+})
+
+_missing_weight_keys = _EXPECTED_WEIGHT_KEYS - frozenset(SCORE_WEIGHTS)
+_extra_weight_keys   = frozenset(SCORE_WEIGHTS) - _EXPECTED_WEIGHT_KEYS
+if _missing_weight_keys or _extra_weight_keys:
+    raise ValueError(
+        f"SCORE_WEIGHTS key mismatch. "
+        f"Missing keys: {sorted(_missing_weight_keys)}. "
+        f"Unexpected keys: {sorted(_extra_weight_keys)}. "
+        "Ensure every criterion key in analyzer.py has a corresponding entry "
+        "in SCORE_WEIGHTS and vice versa."
+    )
+del _missing_weight_keys, _extra_weight_keys, _EXPECTED_WEIGHT_KEYS
 
 # ---------------------------------------------------------------------------
 # Length thresholds
@@ -75,7 +105,8 @@ if not (LENGTH_MINIMUM < LENGTH_GOOD < LENGTH_EXCELLENT < LENGTH_MAXIMUM):
 # ---------------------------------------------------------------------------
 
 ENTROPY_GOOD_THRESHOLD: float = 50.0
-SHANNON_WEIGHT:         float = 0.4   # blend factor between pool and Shannon entropy
+
+SHANNON_WEIGHT: float = 0.6   # blend factor: 40 % pool, 60 % Shannon
 
 if not (0.0 < SHANNON_WEIGHT < 1.0):
     raise ValueError(f"SHANNON_WEIGHT must be in (0, 1), got {SHANNON_WEIGHT!r}.")
@@ -84,9 +115,7 @@ if not (0.0 < SHANNON_WEIGHT < 1.0):
 # Repeated-character threshold
 # ---------------------------------------------------------------------------
 
-# A password fails the repetition check when its most frequent character
-# exceeds this fraction of the total length.
-REPEATED_CHAR_RATIO: float = 0.4
+REPEATED_CHAR_RATIO: float = 0.4  # fails at >= this ratio (strict less-than check)
 
 if not (0.0 < REPEATED_CHAR_RATIO < 1.0):
     raise ValueError(
@@ -97,39 +126,45 @@ if not (0.0 < REPEATED_CHAR_RATIO < 1.0):
 # Composition thresholds
 # ---------------------------------------------------------------------------
 
-# Minimum ratio of distinct characters for the uniqueness check.
 CHAR_UNIQUENESS_MIN_RATIO: float = 0.6
-
-# Minimum number of character classes for the variety check.
-CHAR_VARIETY_MIN_CLASSES: int = 3
 
 if not (0.0 < CHAR_UNIQUENESS_MIN_RATIO <= 1.0):
     raise ValueError(
         f"CHAR_UNIQUENESS_MIN_RATIO must be in (0, 1], "
         f"got {CHAR_UNIQUENESS_MIN_RATIO!r}."
     )
-if CHAR_VARIETY_MIN_CLASSES < 2:
+
+# The analyser measures exactly this many character classes:
+# has_upper, has_lower, has_digit, has_special, has_non_ascii
+_CHAR_CLASS_COUNT: int = 5
+
+CHAR_VARIETY_MIN_CLASSES: int = 3
+
+if not (2 <= CHAR_VARIETY_MIN_CLASSES <= _CHAR_CLASS_COUNT):
     raise ValueError(
-        f"CHAR_VARIETY_MIN_CLASSES must be >= 2, got {CHAR_VARIETY_MIN_CLASSES!r}."
+        f"CHAR_VARIETY_MIN_CLASSES must be in [2, {_CHAR_CLASS_COUNT}] "
+        f"(the analyser measures at most {_CHAR_CLASS_COUNT} character classes). "
+        f"Got {CHAR_VARIETY_MIN_CLASSES!r}."
     )
 
 # ---------------------------------------------------------------------------
 # Strength bands  (threshold, label, colour_key) — sorted descending by threshold
 # ---------------------------------------------------------------------------
 
-STRENGTH_BANDS: list[tuple[int, str, str]] = [
+# Immutable tuple so post-import mutation raises TypeError (Bug #2 fix).
+STRENGTH_BANDS: tuple[tuple[int, str, str], ...] = (
     (80, "Very Strong", "bright_green"),
     (60, "Strong",      "green"),
     (40, "Medium",      "yellow"),
     (20, "Weak",        "red"),
     ( 0, "Very Weak",   "bright_red"),
-]
+)
 
-_sorted_bands = sorted(STRENGTH_BANDS, key=lambda t: t[0], reverse=True)
+_sorted_bands = tuple(sorted(STRENGTH_BANDS, key=lambda t: t[0], reverse=True))
 if STRENGTH_BANDS != _sorted_bands:
     raise ValueError(
         "STRENGTH_BANDS must be sorted by threshold descending. "
-        f"Expected order: {_sorted_bands}."
+        f"Expected order: {list(_sorted_bands)}."
     )
 del _sorted_bands
 
@@ -152,25 +187,50 @@ SPECIAL_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
 # Keyboard walk patterns
 # ---------------------------------------------------------------------------
 
-# Not part of the public API — used only during module initialisation below.
 _KEYBOARD_PATTERN_MIN_LEN: int = 4
 
 _BASE_KEYBOARD_PATTERNS: tuple[str, ...] = (
-    # Horizontal rows
+    # ── Horizontal rows (left-to-right) ─────────────────────────────────────
     "qwerty", "qwertz", "azerty",
     # Middle row
     "asdfgh",
     # Bottom row
     "zxcvbn",
-    # Numeric sequences
+    "ytrewq",        # reverse of qwerty top row
+    "poiuyt",        # right half of top row, reversed
+    "lkjhgf",        # right half of middle row, reversed
+    "lkjhgfdsa",     # full middle row, reversed
+    "mnbvcxz",       # bottom row, reversed
+
+    # ── Numeric sequences ────────────────────────────────────────────────────
     "123456",
     "234567", "345678", "456789", "567890",
     "987654", "876543", "765432",
     "0987654321",
-    # Alphabetical sequences
+
+    # ── Alphabetical sequences ───────────────────────────────────────────────
     "abcdef", "abcdefg", "abcdefgh",
-    # Vertical column walks
+
+    # ── Vertical single-column walks ─────────────────────────────────────────
     "1qaz", "2wsx", "3edc",
+
+    # ── Multi-column vertical walks ──────────────────────────────────────────
+    "qazwsx", "wsxedc", "edcrfv", "rfvtgb",
+
+    # ── Mixed numeric-alpha diagonal walks ───────────────────────────────────
+    "1q2w3e", "q2w3e4", "1q2w3e4r",
+
+    # ── Shifted-key numeric sequences (Shift+1..6 on QWERTY = !@#$%^) ───────
+    "!@#$%^", "!@#$%^&",
+
+    # ── Numpad walks — SC-03 FIX ─────────────────────────────────────────────
+    # Common numpad patterns were absent from the original list.
+    "7894561230",    # numpad rows top-to-bottom
+    "0321654987",    # numpad rows bottom-to-top
+    "741852963",     # numpad left column → middle → right (vertical sweep)
+    "369258147",     # numpad right column → middle → left
+    "159357",        # numpad diagonal
+    "753159",        # reverse diagonal
 )
 
 # Expand each base pattern to include its reverse; deduplicate while preserving
@@ -367,10 +427,10 @@ def _load_common_passwords() -> frozenset[str]:
     data_path = _pathlib.Path(__file__).parent / "data" / "common_passwords.txt"
 
     if not data_path.exists():
-        _logger.debug(
+        _logger.warning(
             "Common passwords data file not found at %s. "
             "Using the built-in fallback list (%d entries). "
-            "For better coverage, ship data/common_passwords.txt with at least "
+            "For proper coverage, ship data/common_passwords.txt with at least "
             "the SecLists top-10 000 password list.",
             data_path,
             len(_BUILTIN_COMMON_PASSWORDS),
@@ -427,10 +487,9 @@ if _mixed_case:
 del _mixed_case
 
 # ---------------------------------------------------------------------------
-# Overlap guards — kept at the bottom so both collections are fully defined.
+# Overlap guards
 # ---------------------------------------------------------------------------
 
-# Exact-match overlap causes a hidden double-penalty.
 _overlap = frozenset(KEYBOARD_PATTERNS) & COMMON_PASSWORDS
 if _overlap:
     raise ValueError(
@@ -440,8 +499,6 @@ if _overlap:
     )
 del _overlap
 
-# Substring overlaps are handled by the skip logic; log at DEBUG to avoid
-# polluting CI output when the module is freshly imported.
 _substring_overlaps: list[tuple[str, str]] = [
     (pattern, entry)
     for pattern in KEYBOARD_PATTERNS
