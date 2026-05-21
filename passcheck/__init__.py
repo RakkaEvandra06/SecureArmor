@@ -3,7 +3,7 @@ from importlib.metadata import PackageNotFoundError, version as _metadata_versio
 
 from .analyzer import PasswordAnalyzer
 from .models import CriterionResult, PasswordAnalysis
-from .scoring import AnalysisSummary, criteria_summary, max_possible_score
+from .scoring import AnalysisSummary, criteria_summary, max_possible_score, score_bar
 
 try:
     __version__: str = _metadata_version("passcheck")
@@ -18,4 +18,5 @@ __all__ = [
     "AnalysisSummary",
     "criteria_summary",
     "max_possible_score",
+    "score_bar",
 ]
