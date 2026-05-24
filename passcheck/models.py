@@ -1,25 +1,42 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
+
+class SkipReason(str, Enum):
+    """Stable, versioned reason codes for skipped :class:`CriterionResult` entries."""
+
+    COMMON_PASSWORD_DETECTED   = "common_password_detected"
+    REPETITION_PENALTY_APPLIED = "repetition_penalty_applied"
 
 @dataclass(frozen=True)
 class CriterionResult:
     """Immutable result for a single scoring criterion."""
 
-    name:       str
-    passed:     bool
-    score:      int
-    max_score:  int
-    detail:     str
-    suggestion: str  = ""
-    skipped:    bool = False
+    name:        str
+    passed:      bool
+    score:       int
+    max_score:   int
+    detail:      str
+    suggestion:  str            = ""
+    skipped:     bool           = False
+    skip_reason: str            = ""
 
     def __post_init__(self) -> None:
         self._validate_score_bounds()
         self._validate_passed_consistency()
         self._validate_skipped_consistency()
+
+    # ------------------------------------------------------------------
+    # Public convenience predicate
+    # ------------------------------------------------------------------
+
+    @property
+    def evaluated(self) -> bool:
+        """Return ``True`` when this criterion was actually run (i.e. not skipped)."""
+        return not self.skipped
 
     # ------------------------------------------------------------------
     # Validators
@@ -60,6 +77,12 @@ class CriterionResult:
     def _validate_skipped_consistency(self) -> None:
         """Enforce invariants that apply to skipped criteria."""
         if not self.skipped:
+            if self.skip_reason:
+                raise ValueError(
+                    "CriterionResult.skip_reason must be empty when skipped=False, "
+                    f"got {self.skip_reason!r}. "
+                    "Set skip_reason only together with skipped=True."
+                )
             # Enforce the failed-criterion zero-score rule here (not skipped, not passed).
             if not self.passed and self.score != 0:
                 raise ValueError(
@@ -83,7 +106,6 @@ class CriterionResult:
                 "A skipped CriterionResult must not carry a non-empty suggestion "
                 "(the criterion that triggered the skip already advises the user)."
             )
-
 
 @dataclass(frozen=True)
 class PasswordAnalysis:
