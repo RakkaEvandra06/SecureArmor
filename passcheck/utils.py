@@ -54,26 +54,27 @@ _LEET_TABLE: dict[int, str] = str.maketrans({
     "1": "i",   # adm1n → admin
     "!": "i",   # pass!on → passion
     "|": "i",
-    "6": "b",   # visually resembles b, not g (e.g. "6all" → "ball")
-    "9": "g",   # 9 visually resembles g (e.g. "9ame" → "game")
+    "6": "b",   # 6all → ball)
+    "9": "g",   # 9ame → game)
     "8": "b",   # 8ball → bball
     "0": "o",
     "5": "s", "$": "s",
     "7": "t",
 })
 
-_PUNCTUATION_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
+_PUNCTUATION_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
 
 # ---------------------------------------------------------------------------
 # Lookup normalisation
 # ---------------------------------------------------------------------------
 
-def normalise_for_lookup(pw: str) -> tuple[str, str, str, str]:
-    """Return four lookup keys for common-password detection."""
+def normalise_for_lookup(pw: str) -> tuple[str, str, str, str, str]:
+    """Return five lookup keys for common-password detection."""
     nfkd     = unicodedata.normalize("NFKD", pw.lower())
     ascii_pw = nfkd.encode("ascii", errors="ignore").decode("ascii")
     # Strip punctuation on the raw ASCII form first, then leet-substitute.
-    stripped   = ascii_pw.strip(_PUNCTUATION_CHARS)
-    normalised = stripped.translate(_LEET_TABLE)
-    leet_full  = ascii_pw.translate(_LEET_TABLE)
-    return ascii_pw, normalised, stripped, leet_full
+    stripped            = ascii_pw.strip(_PUNCTUATION_CHARS)
+    normalised          = stripped.translate(_LEET_TABLE)
+    leet_full           = ascii_pw.translate(_LEET_TABLE)
+    stripped_normalised = stripped.translate(_LEET_TABLE)
+    return ascii_pw, normalised, stripped, leet_full, stripped_normalised
