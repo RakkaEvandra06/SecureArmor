@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import getpass
 import json
 import sys
+import time
 from collections.abc import Iterator
 from enum import IntEnum
 
@@ -31,26 +33,20 @@ class _ExitCode(IntEnum):
 # Security helpers
 # ---------------------------------------------------------------------------
 
+_DEFAULT_INTERACTIVE_RATE_LIMIT_MS: float = 50.0
+
+_INSECURE_FLAG_WARNING: str = (
+    "WARNING: The --password flag is inherently insecure.\n"
+    "  • Your shell records the value in its history file.\n"
+    "  • The OS writes the full command line to /proc/<pid>/cmdline before\n"
+    "    any Python code runs in-process scrubbing cannot undo this.\n"
+    "  • Other users can read it via 'ps aux' during process execution.\n"
+    "Use the interactive prompt (run 'passcheck' with no flags) for secure input.\n"
+)
+
 def _warn_insecure_flag() -> None:
     """Emit a warning to stderr whenever ``--password`` is used directly."""
-    click.echo(
-        "Warning: Passing a password via --password exposes it in your shell "
-        "history AND in the process list (visible to all users via 'ps aux' or "
-        "'/proc/<pid>/cmdline'). Use the interactive prompt instead for secure "
-        "input.\n",
-        err=True,
-    )
-
-def _scrub_argv_password() -> None:
-    """Overwrite the password value in ``sys.argv`` with ``***``."""
-    argv = sys.argv
-    for i, arg in enumerate(argv):
-        if arg in ("--password", "-p") and i + 1 < len(argv):
-            argv[i + 1] = "***"
-            return
-        if arg.startswith("--password="):
-            argv[i] = "--password=***"
-            return
+    click.echo(_INSECURE_FLAG_WARNING, err=True)
 
 # ---------------------------------------------------------------------------
 # JSON output helper
@@ -72,7 +68,10 @@ def _emit_json(obj: dict[str, object]) -> None:
 def cli(ctx: click.Context) -> None:
     """PassCheck — Password Strength Analyser."""
     if ctx.invoked_subcommand is None:
-        ctx.invoke(check)
+        if not sys.stdin.isatty():
+            ctx.invoke(batch)
+        else:
+            ctx.invoke(check)
 
 # ---------------------------------------------------------------------------
 # Sub-commands
@@ -95,24 +94,40 @@ def cli(ctx: click.Context) -> None:
     default=False,
     help="Output results as JSON.",
 )
-def check(password: str | None, output_json: bool) -> None:
+@click.option(
+    "--rate-limit", "rate_limit_ms",
+    type=float,
+    default=_DEFAULT_INTERACTIVE_RATE_LIMIT_MS,
+    show_default=True,
+    help=(
+        "Milliseconds to wait between analyses in interactive mode "
+        f"(default: {_DEFAULT_INTERACTIVE_RATE_LIMIT_MS:.0f} ms). "
+        "Set to 0 to disable throttling."
+    ),
+)
+def check(
+    password:      str | None,
+    output_json:   bool,
+    rate_limit_ms: float,
+) -> None:
     """Analyse a single password."""
     if password is not None:
         _warn_insecure_flag()
-        # Scrub sys.argv as early as possible to close the process-list window.
-        _scrub_argv_password()
         _run_analysis(password, output_json=output_json)
     elif not sys.stdin.isatty():
         click.echo(
             "Error: stdin is not a TTY. Did you mean to use 'passcheck batch'?\n"
             "Usage examples:\n"
-            "  echo 'mypassword' | passcheck batch\n"
+            "  echo 'mypassword'  | passcheck batch\n"
             "  cat passwords.txt  | passcheck batch",
             err=True,
         )
         raise SystemExit(_ExitCode.ERROR)
     else:
-        _interactive_loop(output_json=output_json)
+        _interactive_loop(
+            output_json=output_json,
+            rate_limit_s=rate_limit_ms / 1000.0,
+        )
 
 @cli.command()
 @click.option(
@@ -121,7 +136,18 @@ def check(password: str | None, output_json: bool) -> None:
     default=False,
     help="Output results as JSON.",
 )
-def batch(output_json: bool) -> None:
+@click.option(
+    "--rate-limit", "rate_limit_ms",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "Minimum milliseconds to wait between analyses in batch mode "
+        "(default: 0 = unlimited). "
+        "Example: --rate-limit=100 limits throughput to 10 analyses/second."
+    ),
+)
+def batch(output_json: bool, rate_limit_ms: float) -> None:
     """Analyse multiple passwords from stdin (one per line)."""
     if sys.stdin.isatty():
         click.echo(
@@ -132,13 +158,13 @@ def batch(output_json: bool) -> None:
         )
         raise SystemExit(_ExitCode.ERROR)
 
-    _run_batch(output_json=output_json)
+    _run_batch(output_json=output_json, rate_limit_s=rate_limit_ms / 1000.0)
 
 # ---------------------------------------------------------------------------
 # Batch helper
 # ---------------------------------------------------------------------------
 
-def _run_batch(*, output_json: bool) -> None:
+def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
     """Stream analysis results for all passwords arriving on stdin."""
     found_any = False
     first     = True
@@ -149,6 +175,8 @@ def _run_batch(*, output_json: bool) -> None:
             if not output_json and not first:
                 print_separator()
             _run_analysis(pw, output_json=output_json)
+            if rate_limit_s > 0:
+                time.sleep(rate_limit_s)
             first = False
     except KeyboardInterrupt:
         click.echo("\nInterrupted.", err=True)
@@ -200,10 +228,12 @@ def _run_analysis(password: str, *, output_json: bool) -> None:
         print_analysis(analysis)
         print()  # trailing blank line is owned here, not inside print_analysis
 
-def _interactive_loop(*, output_json: bool) -> None:
+def _interactive_loop(
+    *,
+    output_json:  bool,
+    rate_limit_s: float = _DEFAULT_INTERACTIVE_RATE_LIMIT_MS / 1000.0,
+) -> None:
     """Run the interactive prompt loop until the user quits."""
-    import getpass
-
     if not output_json:
         print_banner()
 
@@ -227,6 +257,8 @@ def _interactive_loop(*, output_json: bool) -> None:
 
         if not output_json:
             print_separator()
+        if rate_limit_s > 0:
+            time.sleep(rate_limit_s)
 
 # ---------------------------------------------------------------------------
 # Entry point
