@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from .constants import (
+    CHAR_CLASS_COUNT,
     CHAR_UNIQUENESS_MIN_RATIO,
     CHAR_VARIETY_MIN_CLASSES,
-    COMMON_PASSWORDS,
     ENTROPY_GOOD_THRESHOLD,
     KEYBOARD_PATTERNS,
     LENGTH_EXCELLENT,
@@ -21,53 +21,38 @@ from .constants import (
     SHANNON_WEIGHT,
     SPECIAL_CHARS,
     STRENGTH_BANDS,
+    get_common_passwords as _get_common_passwords,
 )
-from .models import CriterionResult, PasswordAnalysis
-from .utils import masked_password as _masked_password
+from .models import CriterionResult, PasswordAnalysis, SkipReason
+from .utils import (
+    masked_password as _masked_password,
+    normalise_for_lookup as _normalise_for_lookup,
+)
 
 # Maximum number of distinct keyboard patterns shown in a failure detail line.
 _KEYBOARD_DISPLAY_CAP: int = 3
 
-# Appended to the entropy detail when the check is skipped.
-_ENTROPY_SKIPPED_NOTE: str = "- skipped (repetition penalty already applied)"
+_ENTROPY_SKIPPED_NOTE: str = "— skipped (repetition penalty already applied)"
 
-# ---------------------------------------------------------------------------
-# Leet-speak substitution table
-# ---------------------------------------------------------------------------
-
-_LEET_TABLE: dict[int, str] = str.maketrans({
-    "@": "a", "4": "a",
-    "3": "e",
-    "1": "i",   # adm1n → admin, m@tr1x → matrix
-    "!": "i",   # pass!on → passion
-    "|": "i",
-    "6": "g",   # 6oogle → google
-    "8": "b",   # 8ball  → bball
-    "0": "o",
-    "5": "s", "$": "s",
-    "7": "t",
-})
-
-_PUNCTUATION_CHARS: str = (
-    "!@#$%^&*()-_=+[]{}|;:,.<>?/"
-    "\\"   # backslash
-    '"'    # double-quote
-    "'`~"
+# Lowest non-zero band floor (currently 20 for "Weak") minus 1 = 19.
+_COMMON_PASSWORD_SCORE_CAP: int = (
+    min(threshold for threshold, _, _ in STRENGTH_BANDS if threshold > 0) - 1
 )
 
-#   '!!password!!'  →  strip  →  'password'   →  leet  →  'password'  ✓
-#   'adm1n'         →  strip  →  'adm1n'      →  leet  →  'admin'     ✓
-#   'p@$$w0rd'      →  strip  →  'p@$$w0rd'   →  leet  →  'password'  ✓
-#   '@dmin'         →  leet (no strip first)   →  'admin'             ✓
-def _normalise_for_lookup(pw: str) -> tuple[str, str, str, str]:
-    """Return four lookup keys for common-password detection."""
-    nfkd     = unicodedata.normalize("NFKD", pw.lower())
-    ascii_pw = nfkd.encode("ascii", errors="ignore").decode("ascii")
-    # Strip punctuation on the raw ASCII form first, then leet-substitute.
-    stripped   = ascii_pw.strip(_PUNCTUATION_CHARS)
-    normalised = stripped.translate(_LEET_TABLE)
-    leet_full  = ascii_pw.translate(_LEET_TABLE)
-    return ascii_pw, normalised, stripped, leet_full
+# Guard: the cap must remain below the Weak floor so common passwords are
+# always rated "Very Weak", not "Weak".
+assert _COMMON_PASSWORD_SCORE_CAP < min(
+    t for t, _, _ in STRENGTH_BANDS if t > 0
+), (
+    f"_COMMON_PASSWORD_SCORE_CAP ({_COMMON_PASSWORD_SCORE_CAP}) must be strictly "
+    "below the lowest non-zero STRENGTH_BANDS threshold."
+)
+
+_EFFECTIVE_POOL_VARIETY_FACTOR: int = 4
+assert 2 <= _EFFECTIVE_POOL_VARIETY_FACTOR <= 16, (
+    f"_EFFECTIVE_POOL_VARIETY_FACTOR ({_EFFECTIVE_POOL_VARIETY_FACTOR}) is outside "
+    "the validated range [2, 16]; adjust the constant and this assertion together."
+)
 
 # ---------------------------------------------------------------------------
 # Character profile
@@ -115,11 +100,11 @@ class _CharProfile:
 
         for ch in pw:
             counts[ch] += 1
-            if not has_upper       and ch.isupper():         has_upper       = True
-            if not has_lower       and ch.islower():         has_lower       = True
-            if not has_digit       and ch.isdigit():         has_digit       = True
-            if not has_special     and ch in SPECIAL_CHARS:  has_special     = True
-            if not has_non_ascii   and ord(ch) > 127:        has_non_ascii   = True
+            if not has_upper       and ch.isupper():                     has_upper       = True
+            if not has_lower       and ch.islower():                     has_lower       = True
+            if not has_digit       and ch.isdigit() and ord(ch) <= 127:  has_digit       = True
+            if not has_special     and ch in SPECIAL_CHARS:              has_special     = True
+            if not has_non_ascii   and ord(ch) > 127:                    has_non_ascii   = True
             if not has_ascii_upper and ch.isupper() and ord(ch) <= 127:
                 has_ascii_upper = True
             if not has_ascii_lower and ch.islower() and ord(ch) <= 127:
@@ -182,10 +167,19 @@ class PasswordAnalyzer:
             repetition_passed=repetition_result.passed,
             password_length=profile.length,
         )
-        common_result   = self._check_no_common_password(password)
+        _kp_found   = self._find_keyboard_patterns(password)
+        keyboard_note = (
+            f" It also contains a keyboard pattern ({_kp_found[0]!r})."
+            if _kp_found else ""
+        )
+        common_result   = self._check_no_common_password(
+            password,
+            keyboard_note=keyboard_note,
+        )
         keyboard_result = self._check_no_keyboard_pattern(
             password,
             skip=not common_result.passed,
+            found=_kp_found,                # reuse the already-computed list
         )
 
         criteria: list[CriterionResult] = [
@@ -204,7 +198,13 @@ class PasswordAnalyzer:
             entropy_result,
         ]
 
-        score        = min(100, sum(c.score for c in criteria))
+        raw_score = sum(c.score for c in criteria)
+
+        score = min(100, raw_score)
+
+        if not common_result.passed:
+            score = min(score, _COMMON_PASSWORD_SCORE_CAP)
+
         label, color = self._strength_band(score)
         suggestions  = tuple(
             c.suggestion
@@ -240,12 +240,22 @@ class PasswordAnalyzer:
         """Build a length-based :class:`CriterionResult` from *profile*."""
         passed = profile.length >= threshold
         w      = SCORE_WEIGHTS[key]
+        if passed:
+            detail = (
+                f"Length is {profile.length} chars"
+                f" \u2014 meets {label} (\u2265\u00a0{threshold})"
+            )
+        else:
+            detail = (
+                f"Length is {profile.length} chars"
+                f" \u2014 below {label} of {threshold}"
+            )
         return CriterionResult(
             name       = name,
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
-            detail     = f"Length is {profile.length} characters ({label} {threshold})",
+            detail     = detail,
             suggestion = suggestion if not passed else "",
         )
 
@@ -279,7 +289,7 @@ class PasswordAnalyzer:
             key        = "length_minimum",
             name       = "Minimum length",
             threshold  = LENGTH_MINIMUM,
-            label      = "minimum >=",
+            label      = "minimum",
             suggestion = f"Use at least {LENGTH_MINIMUM} characters.",
         )
 
@@ -289,7 +299,7 @@ class PasswordAnalyzer:
             key        = "length_good",
             name       = "Recommended length",
             threshold  = LENGTH_GOOD,
-            label      = "recommended >=",
+            label      = "recommended",
             suggestion = f"Aim for at least {LENGTH_GOOD} characters for better security.",
         )
 
@@ -299,7 +309,7 @@ class PasswordAnalyzer:
             key        = "length_excellent",
             name       = "Excellent length",
             threshold  = LENGTH_EXCELLENT,
-            label      = "excellent >=",
+            label      = "excellent",
             suggestion = (
                 f"Consider a passphrase of {LENGTH_EXCELLENT}+ characters "
                 "for maximum security."
@@ -335,8 +345,8 @@ class PasswordAnalyzer:
             key            = "has_digit",
             name           = "Digits",
             present        = profile.has_digit,
-            detail_present = "Contains at least one digit",
-            detail_absent  = "No digits found",
+            detail_present = "Contains at least one ASCII digit (0-9)",
+            detail_absent  = "No ASCII digits found",
             suggestion     = "Add at least one number (0-9).",
         )
 
@@ -356,13 +366,22 @@ class PasswordAnalyzer:
 
     def _check_char_variety(self, profile: _CharProfile) -> CriterionResult:
         """Award points when the password uses at least 3 of the 5 character classes."""
-        class_count = sum((
+        class_flags = (
             profile.has_ascii_upper,
             profile.has_ascii_lower,
             profile.has_digit,
             profile.has_special,
             profile.has_non_ascii,
-        ))
+        )
+
+        assert len(class_flags) == CHAR_CLASS_COUNT, (
+            f"class_flags has {len(class_flags)} elements but "
+            f"CHAR_CLASS_COUNT={CHAR_CLASS_COUNT}. "
+            "Update _check_char_variety() and CHAR_CLASS_COUNT in constants.py together."
+        )
+
+        class_count   = sum(class_flags)
+        total_classes = len(class_flags)
         passed = class_count >= CHAR_VARIETY_MIN_CLASSES
         w      = SCORE_WEIGHTS["char_variety"]
         return CriterionResult(
@@ -370,7 +389,7 @@ class PasswordAnalyzer:
             passed     = passed,
             score      = w if passed else 0,
             max_score  = w,
-            detail     = f"Uses {class_count}/5 character classes",
+            detail     = f"Uses {class_count}/{total_classes} character classes",
             suggestion = (
                 "Mix uppercase, lowercase, digits, special characters, "
                 "or non-ASCII characters."
@@ -391,7 +410,7 @@ class PasswordAnalyzer:
             max_score  = w,
             detail     = f"{unique_count} unique chars out of {profile.length} ({ratio:.0%})",
             suggestion = (
-                "Avoid repetitive patterns — use a greater variety of distinct characters."
+                "Avoid repetitive patterns, use a greater variety of distinct characters."
                 if not passed else ""
             ),
         )
@@ -400,16 +419,35 @@ class PasswordAnalyzer:
     # Criterion checks — blacklist / pattern detection
     # ------------------------------------------------------------------
 
-    def _check_no_common_password(self, pw: str) -> CriterionResult:
+    def _check_no_common_password(
+        self,
+        pw: str,
+        *,
+        keyboard_note: str = "",
+    ) -> CriterionResult:
         """Fail if the password (or a normalised variant) appears in the common-password list."""
-        ascii_lower, normalised, stripped, leet_full = _normalise_for_lookup(pw)
+        ascii_lower, stripped, leet_full, stripped_normalised, reversed_leet = (
+            _normalise_for_lookup(pw)
+        )
+        # Lazy-load: the frozenset is computed and validated on the first call
+        # then cached; subsequent calls are O(1).
+        common_passwords = _get_common_passwords()
         is_common = (
-            ascii_lower in COMMON_PASSWORDS   # verbatim:         "angel1"
-            or normalised  in COMMON_PASSWORDS # strip + leet:     "adm1n"      → "admin"
-            or stripped    in COMMON_PASSWORDS # edge-stripped:    "!!password!!" → "password"
-            or leet_full   in COMMON_PASSWORDS # leet (no strip):  "@dmin"      → "admin"
+            ascii_lower            in common_passwords  # verbatim:              "angel1"
+            or stripped            in common_passwords  # edge-strip:            "!!password!!" → "password"
+            or leet_full           in common_passwords  # leet only:             "@dmin"        → "admin"
+            or stripped_normalised in common_passwords  # strip then leet:       "!!p@ssword!!" → "password"
+            or reversed_leet       in common_passwords  # reversed leet (SEC-02):"drowssap"     → "password"
         )
         w = SCORE_WEIGHTS["no_common_password"]
+
+        suggestion = ""
+        if is_common:
+            suggestion = (
+                "Avoid well-known passwords and their simple substitutions, "
+                f"they are cracked instantly.{keyboard_note}"
+            )
+
         return CriterionResult(
             name       = "Not a common password",
             passed     = not is_common,
@@ -420,40 +458,37 @@ class PasswordAnalyzer:
                 if is_common
                 else "Not found in common password lists"
             ),
-            suggestion = (
-                "Avoid well-known passwords and their simple substitutions — "
-                "they are cracked instantly."
-                if is_common else ""
-            ),
+            suggestion = suggestion,
         )
 
     def _check_no_keyboard_pattern(
         self,
         pw: str,
         *,
-        skip: bool = False,
+        skip:  bool             = False,
+        found: list[str] | None = None,
     ) -> CriterionResult:
         """Fail if the password contains a recognisable keyboard walk."""
         w = SCORE_WEIGHTS["no_keyboard_pattern"]
 
         if skip:
             return CriterionResult(
-                name       = "No keyboard patterns",
-                passed     = False,
-                skipped    = True,
-                score      = 0,
-                max_score  = w,
-                detail     = "- skipped (common password already detected)",
-                suggestion = "",
+                name        = "No keyboard patterns",
+                passed      = False,   # not a failure — criterion was not evaluated
+                skipped     = True,
+                score       = 0,
+                max_score   = w,
+                detail      = "— skipped (common password already detected)",
+                suggestion  = "",
+                skip_reason = SkipReason.COMMON_PASSWORD_DETECTED,
             )
+        if found is None:
+            found = self._find_keyboard_patterns(pw)
 
-        pw_lower = pw.lower()
-        found    = [p for p in KEYBOARD_PATTERNS if p in pw_lower]
-        passed   = not found
-
-        display  = found[:_KEYBOARD_DISPLAY_CAP]
-        extra    = len(found) - len(display)
-        suffix   = f" (+{extra} more)" if extra else ""
+        passed  = not found
+        display = found[:_KEYBOARD_DISPLAY_CAP]
+        extra   = len(found) - len(display)
+        suffix  = f" (+{extra} more)" if extra else ""
 
         return CriterionResult(
             name       = "No keyboard patterns",
@@ -473,13 +508,15 @@ class PasswordAnalyzer:
 
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Fail if a single character occupies 40 % or more of the password."""
+        w = SCORE_WEIGHTS["no_repeated_chars"]
+
         if profile.length == 0:
-            raise RuntimeError(
-                "_check_no_repeated_chars() reached with an empty profile — "
-                "analyze() must reject empty passwords before any criterion runs."
+            raise ValueError(
+                "_check_no_repeated_chars() called with a zero-length profile. "
+                "Call analyze() instead of invoking criterion methods directly, "
+                "or ensure the profile is built from a non-empty password."
             )
 
-        w = SCORE_WEIGHTS["no_repeated_chars"]
         top_char, top_count = profile.most_common(1)[0]
         ratio  = top_count / profile.length
         passed = ratio < REPEATED_CHAR_RATIO
@@ -490,11 +527,11 @@ class PasswordAnalyzer:
             score      = w if passed else 0,
             max_score  = w,
             detail     = (
-                f"Max repetition: {top_count}x ({ratio:.0%}) — within limits"
+                f"Max repetition: {top_count}x ({ratio:.0%}), within limits"
                 if passed
                 else (
                     f"Top character appears {top_count}x "
-                    f"({ratio:.0%} of password) — exceeds limit"
+                    f"({ratio:.0%} of password), exceeds limit"
                 )
             ),
             suggestion = (
@@ -515,17 +552,17 @@ class PasswordAnalyzer:
 
         if not repetition_passed:
             return CriterionResult(
-                name       = "Entropy",
-                passed     = False,
-                skipped    = True,
-                score      = 0,
-                max_score  = w,
-                detail     = f"Estimated entropy: {entropy_bits:.1f} bits {_ENTROPY_SKIPPED_NOTE}",
-                suggestion = "",
+                name        = "Entropy",
+                passed      = False,   # not a failure — criterion was not evaluated
+                skipped     = True,
+                score       = 0,
+                max_score   = w,
+                detail      = f"Estimated entropy: {entropy_bits:.1f} bits {_ENTROPY_SKIPPED_NOTE}",
+                suggestion  = "",
+                skip_reason = SkipReason.REPETITION_PENALTY_APPLIED,
             )
 
-        # Hint users to prioritise length when it is the binding constraint.
-        length_note = " — increase length first" if password_length < LENGTH_GOOD else ""
+        length_note = ", increase length first" if password_length < LENGTH_GOOD else ""
         passed      = entropy_bits >= ENTROPY_GOOD_THRESHOLD
 
         return CriterionResult(
@@ -548,6 +585,12 @@ class PasswordAnalyzer:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _find_keyboard_patterns(pw: str) -> list[str]:
+        """Return every keyboard pattern found in *pw* (case-insensitive)."""
+        pw_lower = pw.lower()
+        return [p for p in KEYBOARD_PATTERNS if p in pw_lower]
+
+    @staticmethod
     def _calculate_entropy(profile: _CharProfile) -> float:
         """Estimate password entropy (bits) via a pool-size / Shannon blend."""
         if profile.length == 0:
@@ -563,7 +606,9 @@ class PasswordAnalyzer:
         if pool == 0:
             return 0.0
 
-        pool_entropy_per_char = math.log2(pool)
+        unique_count          = len(profile.char_counts)
+        effective_pool        = min(pool, unique_count * _EFFECTIVE_POOL_VARIETY_FACTOR)
+        pool_entropy_per_char = math.log2(effective_pool) if effective_pool > 1 else 0.0
 
         total = profile.length
         shannon_per_char = -sum(
@@ -583,7 +628,8 @@ class PasswordAnalyzer:
         for threshold, label, color in STRENGTH_BANDS:
             if score >= threshold:
                 return label, color
-        raise ValueError(
-            f"No matching strength band found for score {score}. "
-            "Ensure STRENGTH_BANDS contains an entry with threshold 0."
+        assert False, (  # pragma: no cover
+            f"Unreachable: no strength band matched score={score}. "
+            "Ensure STRENGTH_BANDS contains an entry with threshold 0 "
+            "(enforced at import time by constants.py)."
         )
