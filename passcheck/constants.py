@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import logging as _logging
 import pathlib as _pathlib
+import threading as _threading
 from types import MappingProxyType
+
+from .utils import normalise_for_lookup as _normalise_for_lookup
 
 __all__ = [
     "SCORE_WEIGHTS",
@@ -17,9 +20,10 @@ __all__ = [
     "VALID_COLOUR_KEYS",
     "SPECIAL_CHARS",
     "KEYBOARD_PATTERNS",
-    "COMMON_PASSWORDS",
+    "get_common_passwords",
     "CHAR_UNIQUENESS_MIN_RATIO",
     "CHAR_VARIETY_MIN_CLASSES",
+    "CHAR_CLASS_COUNT",
 ]
 
 _logger = _logging.getLogger(__name__)
@@ -32,10 +36,10 @@ SCORE_WEIGHTS: MappingProxyType[str, int] = MappingProxyType({
     "length_minimum":       9,
     "length_good":          9,
     "length_excellent":     4,
-    "has_uppercase":        9,
-    "has_lowercase":        4,
+    "has_uppercase":        7,
+    "has_lowercase":        7,
     "has_digit":            9,
-    "has_special":         13,
+    "has_special":         12,
     "char_variety":         9,
     "char_uniqueness":      4,
     "no_common_password":   9,
@@ -43,7 +47,6 @@ SCORE_WEIGHTS: MappingProxyType[str, int] = MappingProxyType({
     "no_repeated_chars":    4,
     "entropy_bonus":        8,
 })
-# Total: 9+9+4+9+4+9+13+9+4+9+9+4+8 = 100
 
 if not all(v >= 0 for v in SCORE_WEIGHTS.values()):
     raise ValueError("All SCORE_WEIGHTS values must be non-negative.")
@@ -134,16 +137,14 @@ if not (0.0 < CHAR_UNIQUENESS_MIN_RATIO <= 1.0):
         f"got {CHAR_UNIQUENESS_MIN_RATIO!r}."
     )
 
-# The analyser measures exactly this many character classes:
-# has_upper, has_lower, has_digit, has_special, has_non_ascii
-_CHAR_CLASS_COUNT: int = 5
+CHAR_CLASS_COUNT: int = 5
 
 CHAR_VARIETY_MIN_CLASSES: int = 3
 
-if not (2 <= CHAR_VARIETY_MIN_CLASSES <= _CHAR_CLASS_COUNT):
+if not (2 <= CHAR_VARIETY_MIN_CLASSES <= CHAR_CLASS_COUNT):
     raise ValueError(
-        f"CHAR_VARIETY_MIN_CLASSES must be in [2, {_CHAR_CLASS_COUNT}] "
-        f"(the analyser measures at most {_CHAR_CLASS_COUNT} character classes). "
+        f"CHAR_VARIETY_MIN_CLASSES must be in [2, {CHAR_CLASS_COUNT}] "
+        f"(the analyser measures at most {CHAR_CLASS_COUNT} character classes). "
         f"Got {CHAR_VARIETY_MIN_CLASSES!r}."
     )
 
@@ -151,7 +152,7 @@ if not (2 <= CHAR_VARIETY_MIN_CLASSES <= _CHAR_CLASS_COUNT):
 # Strength bands  (threshold, label, colour_key) — sorted descending by threshold
 # ---------------------------------------------------------------------------
 
-# Immutable tuple so post-import mutation raises TypeError (Bug #2 fix).
+# Immutable tuple so post-import mutation raises TypeError.
 STRENGTH_BANDS: tuple[tuple[int, str, str], ...] = (
     (80, "Very Strong", "bright_green"),
     (60, "Strong",      "green"),
@@ -181,7 +182,7 @@ VALID_COLOUR_KEYS: frozenset[str] = frozenset(colour for _, _, colour in STRENGT
 # Special characters
 # ---------------------------------------------------------------------------
 
-SPECIAL_CHARS: str = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
+SPECIAL_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
 
 # ---------------------------------------------------------------------------
 # Keyboard walk patterns
@@ -223,8 +224,7 @@ _BASE_KEYBOARD_PATTERNS: tuple[str, ...] = (
     # ── Shifted-key numeric sequences (Shift+1..6 on QWERTY = !@#$%^) ───────
     "!@#$%^", "!@#$%^&",
 
-    # ── Numpad walks — SC-03 FIX ─────────────────────────────────────────────
-    # Common numpad patterns were absent from the original list.
+    # ── Numpad walks ─────────────────────────────────────────────────────────
     "7894561230",    # numpad rows top-to-bottom
     "0321654987",    # numpad rows bottom-to-top
     "741852963",     # numpad left column → middle → right (vertical sweep)
@@ -255,7 +255,7 @@ del _short_patterns
 # Common passwords list
 # ---------------------------------------------------------------------------
 
-_BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
+_RAW_BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
     "0.0.0.000", "0.0.000", "0000", "00000",
     "000000", "0000000", "00000000", "000000000",
     "0000000000", "0000007", "000007", "0007",
@@ -422,6 +422,34 @@ _BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
     "zzzzzz", "zzzzzzz", "zzzzzzzz",
 })
 
+# Validate raw entries: all must be lowercase ASCII before expansion.
+_non_canonical = [
+    e for e in _RAW_BUILTIN_COMMON_PASSWORDS
+    if not e.isascii() or e != e.lower()
+]
+if _non_canonical:
+    raise ValueError(
+        "_RAW_BUILTIN_COMMON_PASSWORDS entries must be lowercase ASCII. "
+        f"Non-canonical entries: {sorted(_non_canonical)[:10]}"
+        + ("..." if len(_non_canonical) > 10 else "")
+    )
+del _non_canonical
+
+def _expand_builtin_passwords(raw: frozenset[str]) -> frozenset[str]:
+    """Expand each raw entry into all five normalised lookup variants."""
+    expanded: set[str] = set()
+    for entry in raw:
+        expanded.update(_normalise_for_lookup(entry))
+    return frozenset(expanded)
+
+# The publicly used set — every entry stored as all five normalised variants
+# so the fallback path is detection-equivalent to the file-loading path.
+_BUILTIN_COMMON_PASSWORDS: frozenset[str] = _expand_builtin_passwords(
+    _RAW_BUILTIN_COMMON_PASSWORDS
+)
+
+_MAX_COMMON_PASSWORDS_FILE_BYTES: int = 50 * 1024 * 1024  # 50 MB hard cap
+
 def _load_common_passwords() -> frozenset[str]:
     """Load common passwords from an external file, falling back to the built-in set."""
     data_path = _pathlib.Path(__file__).parent / "data" / "common_passwords.txt"
@@ -429,7 +457,7 @@ def _load_common_passwords() -> frozenset[str]:
     if not data_path.exists():
         _logger.warning(
             "Common passwords data file not found at %s. "
-            "Using the built-in fallback list (%d entries). "
+            "Using the built-in fallback list (%d variant entries). "
             "For proper coverage, ship data/common_passwords.txt with at least "
             "the SecLists top-10 000 password list.",
             data_path,
@@ -438,84 +466,136 @@ def _load_common_passwords() -> frozenset[str]:
         return _BUILTIN_COMMON_PASSWORDS
 
     try:
-        file_text = data_path.read_text("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        file_size = data_path.stat().st_size
+    except OSError as exc:
         _logger.warning(
-            "Could not read common passwords from %s (%s). "
-            "Falling back to the built-in list (%d entries).",
+            "Could not stat common passwords file at %s (%s). "
+            "Falling back to the built-in list (%d variant entries).",
             data_path, exc, len(_BUILTIN_COMMON_PASSWORDS),
         )
         return _BUILTIN_COMMON_PASSWORDS
 
-    entries: list[str] = []
-    normalised_count   = 0
-
-    for raw_line in file_text.splitlines():
-        raw_entry = raw_line.strip()
-        if not raw_entry:
-            continue
-        entry = raw_entry.lower()
-        if entry != raw_entry:
-            normalised_count += 1
-        entries.append(entry)
-
-    if normalised_count:
-        _logger.debug(
-            "common_passwords.txt: normalised %d mixed-case entries to lowercase.",
-            normalised_count,
+    if file_size > _MAX_COMMON_PASSWORDS_FILE_BYTES:
+        _logger.warning(
+            "Common passwords file at %s is %.1f MB, which exceeds the %d MB "
+            "safety cap. Falling back to the built-in list (%d variant entries). "
+            "Split the file or raise _MAX_COMMON_PASSWORDS_FILE_BYTES if intentional.",
+            data_path,
+            file_size / 1_048_576,
+            _MAX_COMMON_PASSWORDS_FILE_BYTES // 1_048_576,
+            len(_BUILTIN_COMMON_PASSWORDS),
         )
+        return _BUILTIN_COMMON_PASSWORDS
 
-    loaded = frozenset(entries)
+    entries_set: set[str] = set()
+    raw_count = 0
+
+    try:
+        with data_path.open("r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                raw_entry = raw_line.strip()
+                if not raw_entry:
+                    continue
+                raw_count += 1
+                ascii_lower, stripped, leet_full, stripped_normalised, reversed_leet = (
+                    _normalise_for_lookup(raw_entry)
+                )
+                entries_set.update({
+                    ascii_lower,
+                    stripped,
+                    leet_full,
+                    stripped_normalised,
+                    reversed_leet,
+                })
+    except (OSError, UnicodeDecodeError) as exc:
+        _logger.warning(
+            "Could not read common passwords from %s (%s). "
+            "Falling back to the built-in list (%d variant entries).",
+            data_path, exc, len(_BUILTIN_COMMON_PASSWORDS),
+        )
+        return _BUILTIN_COMMON_PASSWORDS
+
+    loaded = frozenset(entries_set)
     result = loaded | _BUILTIN_COMMON_PASSWORDS
 
     _logger.debug(
-        "Loaded %d entries from %s; %d built-in entries; %d total after merge.",
-        len(loaded), data_path, len(_BUILTIN_COMMON_PASSWORDS), len(result),
+        "Loaded %d raw entries from %s; expanded to %d file variants; "
+        "%d built-in variant entries; %d total after merge.",
+        raw_count, data_path, len(loaded),
+        len(_BUILTIN_COMMON_PASSWORDS), len(result),
     )
     return result
 
-COMMON_PASSWORDS: frozenset[str] = _load_common_passwords()
+_COMMON_PASSWORDS_CACHE: frozenset[str] | None  = None
+_COMMON_PASSWORDS_ERROR: Exception | None       = None
+_COMMON_PASSWORDS_LOCK:  _threading.Lock        = _threading.Lock()
 
-_mixed_case = [e for e in COMMON_PASSWORDS if e != e.lower()]
-if _mixed_case:
-    _sorted_bad = sorted(_mixed_case)
-    _suffix     = "..." if len(_sorted_bad) > 10 else ""
-    raise ValueError(
-        f"All COMMON_PASSWORDS entries must be lower-case. "
-        f"Offending entries: {_sorted_bad[:10]}{_suffix}"
-    )
-del _mixed_case
+def get_common_passwords() -> frozenset[str]:
+    """Return the merged common-password frozenset, loading it on first call."""
+    global _COMMON_PASSWORDS_CACHE, _COMMON_PASSWORDS_ERROR
 
-# ---------------------------------------------------------------------------
-# Overlap guards
-# ---------------------------------------------------------------------------
+    # Fast paths — no lock needed once the outcome (success or failure) is known.
+    if _COMMON_PASSWORDS_CACHE is not None:
+        return _COMMON_PASSWORDS_CACHE
+    if _COMMON_PASSWORDS_ERROR is not None:
+        raise _COMMON_PASSWORDS_ERROR
 
-_overlap = frozenset(KEYBOARD_PATTERNS) & COMMON_PASSWORDS
-if _overlap:
-    raise ValueError(
-        f"Entries appear in both KEYBOARD_PATTERNS and COMMON_PASSWORDS: "
-        f"{sorted(_overlap)}. "
-        "This causes a hidden double-penalty. Remove duplicates from one list."
-    )
-del _overlap
+    with _COMMON_PASSWORDS_LOCK:
+        # Re-check under the lock: another thread may have completed
+        # initialisation (or recorded an error) while this thread was waiting.
+        if _COMMON_PASSWORDS_CACHE is not None:
+            return _COMMON_PASSWORDS_CACHE
+        if _COMMON_PASSWORDS_ERROR is not None:
+            raise _COMMON_PASSWORDS_ERROR
+        try:
+            loaded = _load_common_passwords()
 
-_substring_overlaps: list[tuple[str, str]] = [
-    (pattern, entry)
-    for pattern in KEYBOARD_PATTERNS
-    for entry in COMMON_PASSWORDS
-    if pattern in entry and pattern != entry
-]
-if _substring_overlaps:
-    _preview    = _substring_overlaps[:10]
-    _extra      = len(_substring_overlaps) - len(_preview)
-    _extra_note = f"\n  ...and {_extra} more" if _extra else ""
-    _logger.debug(
-        "KEYBOARD_PATTERNS substrings found inside COMMON_PASSWORDS entries "
-        "(double penalty handled by skip logic):\n%s%s",
-        "\n".join(
-            f"  pattern '{p}' found inside common password '{e}'"
-            for p, e in _preview
-        ),
-        _extra_note,
-    )
-del _substring_overlaps
+            # Validate: all normalised entries must be lower-case.
+            _mixed_case = [e for e in loaded if e != e.lower()]
+            if _mixed_case:
+                _sorted_bad = sorted(_mixed_case)
+                _suffix     = "..." if len(_sorted_bad) > 10 else ""
+                raise ValueError(
+                    f"All COMMON_PASSWORDS entries must be lower-case. "
+                    f"Offending entries: {_sorted_bad[:10]}{_suffix}"
+                )
+
+            # Overlap with keyboard patterns — informational only; double-penalty is
+            # already prevented by the skip logic in PasswordAnalyzer.
+            _overlap = frozenset(KEYBOARD_PATTERNS) & loaded
+            if _overlap:
+                _logger.debug(
+                    "Entries appear in both KEYBOARD_PATTERNS and COMMON_PASSWORDS "
+                    "(double penalty prevented by skip logic): %s",
+                    sorted(_overlap),
+                )
+
+            if _logger.isEnabledFor(_logging.DEBUG):
+                _substring_overlaps: list[tuple[str, str]] = [
+                    (pattern, entry)
+                    for pattern in KEYBOARD_PATTERNS
+                    for entry in loaded
+                    if pattern in entry and pattern != entry
+                ]
+                if _substring_overlaps:
+                    _preview    = _substring_overlaps[:10]
+                    _extra      = len(_substring_overlaps) - len(_preview)
+                    _extra_note = f"\n  ...and {_extra} more" if _extra else ""
+                    _logger.debug(
+                        "KEYBOARD_PATTERNS substrings found inside COMMON_PASSWORDS entries "
+                        "(double penalty handled by skip logic):\n%s%s",
+                        "\n".join(
+                            f"  pattern '{p}' found inside common password '{e}'"
+                            for p, e in _preview
+                        ),
+                        _extra_note,
+                    )
+
+            _COMMON_PASSWORDS_CACHE = loaded
+
+        except Exception as exc:
+            # Store the exception so subsequent calls fail fast without retrying.
+            _COMMON_PASSWORDS_ERROR = exc
+            raise
+
+    return _COMMON_PASSWORDS_CACHE
