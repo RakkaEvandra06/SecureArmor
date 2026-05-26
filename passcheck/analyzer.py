@@ -63,8 +63,6 @@ class _CharProfile:
     """Immutable character-level profile of a password."""
 
     length:          int
-    has_upper:       bool
-    has_lower:       bool
     has_digit:       bool
     has_special:     bool
     has_non_ascii:   bool
@@ -89,8 +87,6 @@ class _CharProfile:
     @classmethod
     def from_password(cls, pw: str) -> _CharProfile:
         """Build a :class:`_CharProfile` from *pw* in a single O(n) pass."""
-        has_upper       = False
-        has_lower       = False
         has_digit       = False
         has_special     = False
         has_non_ascii   = False
@@ -100,8 +96,6 @@ class _CharProfile:
 
         for ch in pw:
             counts[ch] += 1
-            if not has_upper       and ch.isupper():                     has_upper       = True
-            if not has_lower       and ch.islower():                     has_lower       = True
             if not has_digit       and ch.isdigit() and ord(ch) <= 127:  has_digit       = True
             if not has_special     and ch in SPECIAL_CHARS:              has_special     = True
             if not has_non_ascii   and ord(ch) > 127:                    has_non_ascii   = True
@@ -112,8 +106,6 @@ class _CharProfile:
 
         return cls(
             length          = len(pw),
-            has_upper       = has_upper,
-            has_lower       = has_lower,
             has_digit       = has_digit,
             has_special     = has_special,
             has_non_ascii   = has_non_ascii,
@@ -474,7 +466,7 @@ class PasswordAnalyzer:
         if skip:
             return CriterionResult(
                 name        = "No keyboard patterns",
-                passed      = False,   # not a failure — criterion was not evaluated
+                passed      = False,
                 skipped     = True,
                 score       = 0,
                 max_score   = w,
@@ -509,13 +501,10 @@ class PasswordAnalyzer:
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Fail if a single character occupies 40 % or more of the password."""
         w = SCORE_WEIGHTS["no_repeated_chars"]
-
-        if profile.length == 0:
-            raise ValueError(
-                "_check_no_repeated_chars() called with a zero-length profile. "
-                "Call analyze() instead of invoking criterion methods directly, "
-                "or ensure the profile is built from a non-empty password."
-            )
+        assert profile.length > 0, (
+            "_check_no_repeated_chars() requires a non-empty profile; "
+            "ensure analyze() validated the password before building the profile."
+        )
 
         top_char, top_count = profile.most_common(1)[0]
         ratio  = top_count / profile.length
@@ -553,7 +542,7 @@ class PasswordAnalyzer:
         if not repetition_passed:
             return CriterionResult(
                 name        = "Entropy",
-                passed      = False,   # not a failure — criterion was not evaluated
+                passed      = False,
                 skipped     = True,
                 score       = 0,
                 max_score   = w,
