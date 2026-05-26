@@ -16,6 +16,7 @@ from .display import (
     print_banner,
     print_separator,
 )
+from .constants import LENGTH_MAXIMUM
 from .models import PasswordAnalysis
 
 # Module-level analyser — stateless, so a single shared instance is safe.
@@ -164,6 +165,26 @@ def batch(output_json: bool, rate_limit_ms: float) -> None:
 # Batch helper
 # ---------------------------------------------------------------------------
 
+def _warn_invalid_password(pw: str, *, output_json: bool) -> None:
+    """Emit a per-line warning for passwords that could not be analysed."""
+    if output_json:
+        _emit_json({
+            "event":  "skipped_invalid",
+            "length": len(pw),
+            "limit":  LENGTH_MAXIMUM,
+            "detail": (
+                f"Password of length {len(pw)} exceeds the maximum "
+                f"allowed length of {LENGTH_MAXIMUM} and was skipped."
+            ),
+        })
+    else:
+        click.echo(
+            f"Warning: skipped a password of length {len(pw)} "
+            f"(exceeds the maximum of {LENGTH_MAXIMUM} characters).",
+            err=True,
+        )
+
+
 def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
     """Stream analysis results for all passwords arriving on stdin."""
     found_any = False
@@ -174,7 +195,12 @@ def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
             found_any = True
             if not output_json and not first:
                 print_separator()
-            _run_analysis(pw, output_json=output_json)
+            try:
+                _run_analysis(pw, output_json=output_json)
+            except SystemExit:
+                _warn_invalid_password(pw, output_json=output_json)
+                # Do not increment `first` — separator logic stays consistent.
+                continue
             if rate_limit_s > 0:
                 time.sleep(rate_limit_s)
             first = False
