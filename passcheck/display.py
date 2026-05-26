@@ -11,7 +11,7 @@ colorama.init(autoreset=True)
 
 from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 from .models import PasswordAnalysis
-from .scoring import criteria_summary, score_bar
+from .scoring import criteria_summary, effective_max_score, score_bar
 from .utils import is_utf_terminal as _is_utf_terminal
 
 if TYPE_CHECKING:
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 _BANNER_WIDTH:         int = 60
 _SEPARATOR_WIDTH:      int = 64
 _CRITERION_NAME_WIDTH: int = 26
+_UTF_TERMINAL: bool = _is_utf_terminal()
 
 # ---------------------------------------------------------------------------
 # Colour map
@@ -101,7 +102,7 @@ def print_analysis_json(analysis: PasswordAnalysis) -> None:
 
 def print_banner() -> None:
     """Print the PassCheck welcome banner to stdout."""
-    if _is_utf_terminal():
+    if _UTF_TERMINAL:
         tl, tr, bl, br, h, v = "╔", "╗", "╚", "╝", "═", "║"
     else:
         tl, tr, bl, br, h, v = "+", "+", "+", "+", "-", "|"
@@ -118,7 +119,7 @@ def print_banner() -> None:
 
 def print_separator() -> None:
     """Print a horizontal rule between analysis blocks."""
-    char = "─" if _is_utf_terminal() else "-"
+    char = "─" if _UTF_TERMINAL else "-"
     print(_dim(char * _SEPARATOR_WIDTH))
 
 # ---------------------------------------------------------------------------
@@ -134,14 +135,17 @@ def _print_header(analysis: PasswordAnalysis) -> None:
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
     """Print the score bar, strength label, entropy, and criteria counts."""
-    color = analysis.strength_color
-    score = analysis.score
-    bar   = score_bar(score, width=24)
+    color   = analysis.strength_color
+    score   = analysis.score
+    eff_max = effective_max_score(analysis.criteria)
+    denom   = str(eff_max) if eff_max < 100 else "100"
+    bar_pct = round(score / eff_max * 100) if eff_max > 0 else 0
+    bar     = score_bar(bar_pct, width=24)
 
     print()
     print(
         f"  {_coloured(bar, color)}"
-        f"  {_bold(_coloured(f'{score:>3}/100', color))}"
+        f"  {_bold(_coloured(f'{score:>3}/{denom}', color))}"
         f"  {_bold(_coloured(f'[{analysis.strength_label}]', color))}"
     )
     print(
@@ -154,8 +158,7 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
 
 def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     """Render the per-criterion results table."""
-    utf       = _is_utf_terminal()
-    rule_char = "─" if utf else "-"
+    rule_char = "─" if _UTF_TERMINAL else "-"
 
     col          = _CRITERION_NAME_WIDTH
     header_name  = _ljust_ansi(_bold("Criterion"), col)
@@ -165,7 +168,7 @@ def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     print(_dim("  " + rule_char * (_SEPARATOR_WIDTH - 2)))
 
     for criterion in analysis.criteria:
-        icon, score_cell = _format_criterion_status(criterion, utf=utf)
+        icon, score_cell = _format_criterion_status(criterion, utf=_UTF_TERMINAL)
         name_col  = _ljust_ansi(criterion.name[:col], col)
         score_col = _rjust_ansi(score_cell, 8)
         print(f"  {icon}   {name_col}  {score_col}  {_dim(criterion.detail)}")
