@@ -51,15 +51,18 @@ def masked_password(password: str) -> str:
 _LEET_TABLE: dict[int, str] = str.maketrans({
     "@": "a", "4": "a",
     "3": "e",
-    "1": "i",   # adm1n → admin
+    "1": "i",   # adm1n  → admin
     "!": "i",   # pass!on → passion
     "|": "i",
-    "6": "b",   # 6all → ball)
-    "9": "g",   # 9ame → game)
-    "8": "b",   # 8ball → bball
+    "6": "g",   # 6ame   → game
+    "9": "g",   # an9el  → angel
+    "8": "b",   # 8ball  → bball
     "0": "o",
     "5": "s", "$": "s",
     "7": "t",
+    "+": "t",   # s+rong → strong
+    "2": "z",   # pa22word → password
+    "(": "c",   # (hocolate → chocolate
 })
 
 _PUNCTUATION_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
@@ -69,12 +72,13 @@ _PUNCTUATION_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
 # ---------------------------------------------------------------------------
 
 def normalise_for_lookup(pw: str) -> tuple[str, str, str, str, str]:
-    """Return five lookup keys for common-password detection."""
+    """Return five distinct lookup keys for common-password detection."""
     nfkd     = unicodedata.normalize("NFKD", pw.lower())
     ascii_pw = nfkd.encode("ascii", errors="ignore").decode("ascii")
-    # Strip punctuation on the raw ASCII form first, then leet-substitute.
+
     stripped            = ascii_pw.strip(_PUNCTUATION_CHARS)
-    normalised          = stripped.translate(_LEET_TABLE)
     leet_full           = ascii_pw.translate(_LEET_TABLE)
     stripped_normalised = stripped.translate(_LEET_TABLE)
-    return ascii_pw, normalised, stripped, leet_full, stripped_normalised
+    reversed_leet       = leet_full[::-1]
+
+    return ascii_pw, stripped, leet_full, stripped_normalised, reversed_leet
