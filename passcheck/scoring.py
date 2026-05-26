@@ -21,13 +21,14 @@ class _CriterionSummary(TypedDict):
 class AnalysisSummary(TypedDict):
     """Full JSON-serialisable summary produced by :func:`criteria_summary`."""
 
-    score:        int
-    strength:     str
-    entropy_bits: float
-    passed:       int
-    total:        int
-    suggestions:  list[str]
-    criteria:     list[_CriterionSummary]
+    score:          int
+    strength:       str
+    entropy_bits:   float
+    passed:         int
+    total:          int
+    effective_max:  int
+    suggestions:    list[str]
+    criteria:       list[_CriterionSummary]
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -57,16 +58,19 @@ def max_possible_score(criteria: Sequence[CriterionResult]) -> int:
     """Return the sum of ``max_score`` values for all non-skipped criteria."""
     return sum(c.max_score for c in criteria if not c.skipped)
 
+effective_max_score = max_possible_score
+
 def criteria_summary(analysis: PasswordAnalysis) -> AnalysisSummary:
     """Return a typed, JSON-serialisable summary dict for *analysis*."""
     return AnalysisSummary(
-        score        = analysis.score,
-        strength     = analysis.strength_label,
-        entropy_bits = round(analysis.entropy_bits, 2),
-        passed       = analysis.passed_count,
-        total        = analysis.total_criteria,
-        suggestions  = list(analysis.suggestions),
-        criteria     = [
+        score         = analysis.score,
+        strength      = analysis.strength_label,
+        entropy_bits  = round(analysis.entropy_bits, 2),
+        passed        = analysis.passed_count,
+        total         = analysis.total_criteria,
+        effective_max = max_possible_score(analysis.criteria),
+        suggestions   = list(analysis.suggestions),
+        criteria      = [
             _CriterionSummary(
                 name        = c.name,
                 passed      = c.passed,
