@@ -39,20 +39,22 @@ _COMMON_PASSWORD_SCORE_CAP: int = (
     min(threshold for threshold, _, _ in STRENGTH_BANDS if threshold > 0) - 1
 )
 
-# Guard: the cap must remain below the Weak floor so common passwords are
-# always rated "Very Weak", not "Weak".
-assert _COMMON_PASSWORD_SCORE_CAP < min(
-    t for t, _, _ in STRENGTH_BANDS if t > 0
-), (
-    f"_COMMON_PASSWORD_SCORE_CAP ({_COMMON_PASSWORD_SCORE_CAP}) must be strictly "
-    "below the lowest non-zero STRENGTH_BANDS threshold."
-)
+_lowest_nonzero_band: int = min(t for t, _, _ in STRENGTH_BANDS if t > 0)
+if not (_COMMON_PASSWORD_SCORE_CAP < _lowest_nonzero_band):
+    raise ValueError(
+        f"_COMMON_PASSWORD_SCORE_CAP ({_COMMON_PASSWORD_SCORE_CAP}) must be strictly "
+        f"below the lowest non-zero STRENGTH_BANDS threshold ({_lowest_nonzero_band}). "
+        "Adjust the cap formula or the band configuration."
+    )
+del _lowest_nonzero_band
 
 _EFFECTIVE_POOL_VARIETY_FACTOR: int = 4
-assert 2 <= _EFFECTIVE_POOL_VARIETY_FACTOR <= 16, (
-    f"_EFFECTIVE_POOL_VARIETY_FACTOR ({_EFFECTIVE_POOL_VARIETY_FACTOR}) is outside "
-    "the validated range [2, 16]; adjust the constant and this assertion together."
-)
+
+if not (2 <= _EFFECTIVE_POOL_VARIETY_FACTOR <= 16):
+    raise ValueError(
+        f"_EFFECTIVE_POOL_VARIETY_FACTOR ({_EFFECTIVE_POOL_VARIETY_FACTOR}) is outside "
+        "the validated range [2, 16]; adjust the constant and this guard together."
+    )
 
 # ---------------------------------------------------------------------------
 # Character profile
@@ -159,11 +161,18 @@ class PasswordAnalyzer:
             repetition_passed=repetition_result.passed,
             password_length=profile.length,
         )
-        _kp_found   = self._find_keyboard_patterns(password)
-        keyboard_note = (
-            f" It also contains a keyboard pattern ({_kp_found[0]!r})."
-            if _kp_found else ""
-        )
+        _kp_found = self._find_keyboard_patterns(password)
+        if _kp_found:
+            _kp_display  = _kp_found[:_KEYBOARD_DISPLAY_CAP]
+            _kp_extra    = len(_kp_found) - len(_kp_display)
+            _kp_suffix   = f" (+{_kp_extra} more)" if _kp_extra else ""
+            keyboard_note = (
+                f" It also contains keyboard patterns: "
+                f"{', '.join(repr(p) for p in _kp_display)}{_kp_suffix}."
+            )
+        else:
+            keyboard_note = ""
+
         common_result   = self._check_no_common_password(
             password,
             keyboard_note=keyboard_note,
@@ -366,11 +375,12 @@ class PasswordAnalyzer:
             profile.has_non_ascii,
         )
 
-        assert len(class_flags) == CHAR_CLASS_COUNT, (
-            f"class_flags has {len(class_flags)} elements but "
-            f"CHAR_CLASS_COUNT={CHAR_CLASS_COUNT}. "
-            "Update _check_char_variety() and CHAR_CLASS_COUNT in constants.py together."
-        )
+        if len(class_flags) != CHAR_CLASS_COUNT:
+            raise ValueError(
+                f"class_flags has {len(class_flags)} elements but "
+                f"CHAR_CLASS_COUNT={CHAR_CLASS_COUNT}. "
+                "Update _check_char_variety() and CHAR_CLASS_COUNT in constants.py together."
+            )
 
         class_count   = sum(class_flags)
         total_classes = len(class_flags)
@@ -421,6 +431,20 @@ class PasswordAnalyzer:
         ascii_lower, stripped, leet_full, stripped_normalised, reversed_leet = (
             _normalise_for_lookup(pw)
         )
+
+        if not ascii_lower:
+            w = SCORE_WEIGHTS["no_common_password"]
+            return CriterionResult(
+                name        = "Not a common password",
+                passed      = False,
+                skipped     = True,
+                score       = 0,
+                max_score   = w,
+                detail      = "Unicode-only password, ASCII common-list check skipped",
+                suggestion  = "",
+                skip_reason = SkipReason.UNICODE_ONLY_PASSWORD,
+            )
+
         # Lazy-load: the frozenset is computed and validated on the first call
         # then cached; subsequent calls are O(1).
         common_passwords = _get_common_passwords()
@@ -501,10 +525,11 @@ class PasswordAnalyzer:
     def _check_no_repeated_chars(self, profile: _CharProfile) -> CriterionResult:
         """Fail if a single character occupies 40 % or more of the password."""
         w = SCORE_WEIGHTS["no_repeated_chars"]
-        assert profile.length > 0, (
-            "_check_no_repeated_chars() requires a non-empty profile; "
-            "ensure analyze() validated the password before building the profile."
-        )
+        if profile.length == 0:
+            raise ValueError(
+                "_check_no_repeated_chars() requires a non-empty profile; "
+                "ensure analyze() validated the password before building the profile."
+            )
 
         top_char, top_count = profile.most_common(1)[0]
         ratio  = top_count / profile.length
@@ -536,8 +561,8 @@ class PasswordAnalyzer:
         repetition_passed: bool,
         password_length:   int,
     ) -> CriterionResult:
-        """Award bonus points when estimated entropy meets the threshold."""
-        w = SCORE_WEIGHTS["entropy_bonus"]
+        """Award points when estimated entropy meets the threshold."""
+        w = SCORE_WEIGHTS["entropy"]
 
         if not repetition_passed:
             return CriterionResult(
@@ -592,6 +617,17 @@ class PasswordAnalyzer:
         if profile.has_special:     pool += len(SPECIAL_CHARS)
         if profile.has_non_ascii:   pool += _non_ascii_pool_size(profile.char_counts)
 
+        _has_other_ascii = any(
+            ord(ch) <= 127
+            and not ch.isupper()
+            and not ch.islower()
+            and not ch.isdigit()
+            and ch not in SPECIAL_CHARS          # space is now in SPECIAL_CHARS
+            for ch in profile.char_counts
+        )
+        if _has_other_ascii:
+            pool += 33  # 32 C0 control characters (0x00–0x1F) + DEL (0x7F)
+
         if pool == 0:
             return 0.0
 
@@ -617,7 +653,7 @@ class PasswordAnalyzer:
         for threshold, label, color in STRENGTH_BANDS:
             if score >= threshold:
                 return label, color
-        assert False, (  # pragma: no cover
+        raise RuntimeError(  # pragma: no cover
             f"Unreachable: no strength band matched score={score}. "
             "Ensure STRENGTH_BANDS contains an entry with threshold 0 "
             "(enforced at import time by constants.py)."
