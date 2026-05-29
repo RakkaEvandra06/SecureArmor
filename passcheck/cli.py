@@ -165,45 +165,47 @@ def batch(output_json: bool, rate_limit_ms: float) -> None:
 # Batch helper
 # ---------------------------------------------------------------------------
 
-def _warn_invalid_password(pw: str, *, output_json: bool) -> None:
+def _warn_invalid_password(
+    pw: str,
+    *,
+    output_json: bool,
+    exc: SystemExit | None = None,
+) -> None:
     """Emit a per-line warning for passwords that could not be analysed."""
+    reason: str = ""
+    if exc is not None and isinstance(exc.__cause__, ValueError) and exc.__cause__.args:
+        reason = str(exc.__cause__.args[0])
+    if not reason:
+        reason = (
+            f"Password of length {len(pw)} could not be analysed and was skipped."
+        )
     if output_json:
         _emit_json({
             "event":  "skipped_invalid",
             "length": len(pw),
             "limit":  LENGTH_MAXIMUM,
-            "detail": (
-                f"Password of length {len(pw)} exceeds the maximum "
-                f"allowed length of {LENGTH_MAXIMUM} and was skipped."
-            ),
+            "detail": reason,
         })
     else:
-        click.echo(
-            f"Warning: skipped a password of length {len(pw)} "
-            f"(exceeds the maximum of {LENGTH_MAXIMUM} characters).",
-            err=True,
-        )
+        click.echo(f"Warning: skipped password {reason}", err=True)
 
 
 def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
     """Stream analysis results for all passwords arriving on stdin."""
     found_any = False
-    first     = True
-
+    need_sep  = False
     try:
         for pw in _stdin_passwords(output_json=output_json):
             found_any = True
-            if not output_json and not first:
+            if not output_json and need_sep:
                 print_separator()
+            need_sep = True
             try:
                 _run_analysis(pw, output_json=output_json)
-            except SystemExit:
-                _warn_invalid_password(pw, output_json=output_json)
-                # Do not increment `first` — separator logic stays consistent.
-                continue
+            except SystemExit as exc:
+                _warn_invalid_password(pw, output_json=output_json, exc=exc)
             if rate_limit_s > 0:
                 time.sleep(rate_limit_s)
-            first = False
     except KeyboardInterrupt:
         click.echo("\nInterrupted.", err=True)
         raise SystemExit(_ExitCode.OK)
@@ -238,16 +240,19 @@ def _stdin_passwords(*, output_json: bool = False) -> Iterator[str]:
             yield pw
 
 def _analyze(password: str) -> PasswordAnalysis:
-    """Run the analyser and return the result, or exit with an error message."""
-    try:
-        return _analyzer.analyze(password)
-    except ValueError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(_ExitCode.ERROR) from exc
+    """Run the analyser and return the result; propagate ValueError to the caller."""
+    return _analyzer.analyze(password)
 
 def _run_analysis(password: str, *, output_json: bool) -> None:
     """Analyse *password* and dispatch to the appropriate renderer."""
-    analysis = _analyze(password)
+    try:
+        analysis = _analyze(password)
+    except ValueError as exc:
+        if output_json:
+            _emit_json({"event": "error", "detail": str(exc)})
+        else:
+            click.echo(f"Error: {exc}", err=True)
+        raise SystemExit(_ExitCode.ERROR) from exc
     if output_json:
         print_analysis_json(analysis)
     else:
@@ -279,12 +284,13 @@ def _interactive_loop(
                 print("  Please enter a non-empty password.\n")
             continue
 
+        if rate_limit_s > 0:
+            time.sleep(rate_limit_s)
+
         _run_analysis(pw, output_json=output_json)
 
         if not output_json:
             print_separator()
-        if rate_limit_s > 0:
-            time.sleep(rate_limit_s)
 
 # ---------------------------------------------------------------------------
 # Entry point
