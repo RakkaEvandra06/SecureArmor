@@ -45,7 +45,7 @@ SCORE_WEIGHTS: MappingProxyType[str, int] = MappingProxyType({
     "no_common_password":   9,
     "no_keyboard_pattern":  9,
     "no_repeated_chars":    4,
-    "entropy_bonus":        8,
+    "entropy":              8,
 })
 
 if not all(v >= 0 for v in SCORE_WEIGHTS.values()):
@@ -72,7 +72,7 @@ _EXPECTED_WEIGHT_KEYS: frozenset[str] = frozenset({
     "no_common_password",
     "no_keyboard_pattern",
     "no_repeated_chars",
-    "entropy_bonus",
+    "entropy",
 })
 
 _missing_weight_keys = _EXPECTED_WEIGHT_KEYS - frozenset(SCORE_WEIGHTS)
@@ -182,7 +182,7 @@ VALID_COLOUR_KEYS: frozenset[str] = frozenset(colour for _, _, colour in STRENGT
 # Special characters
 # ---------------------------------------------------------------------------
 
-SPECIAL_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
+SPECIAL_CHARS: str = """ !"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
 
 # ---------------------------------------------------------------------------
 # Keyboard walk patterns
@@ -282,7 +282,7 @@ _RAW_BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
     "2009", "2010", "2011", "2012",
     "aircraft", "airforce", "airman", "airport",
     "alabama", "alan", "albert", "alberto",
-    "alexand", "alexander", "alexandra", "alexandria",
+    "alexander", "alexandra", "alexandria",
     "alexei", "alfred", "alicia", "allen",
     "alliance", "allison", "altamira", "amanda",
     "amateur", "ambers", "amelia", "america",
@@ -398,7 +398,7 @@ _RAW_BUILTIN_COMMON_PASSWORDS: frozenset[str] = frozenset({
     "terminator", "test", "test1", "test123",
     "testing", "testtest", "texas", "thanks",
     "thomas", "thompson", "thunder", "tiger",
-    "tigers", "tigger", "timothy", "tinkerbe",
+    "tigers", "tigger", "timothy", "tinkerbell",
     "titanic", "toad", "tobias", "tomcat",
     "tonight", "tony", "toyota", "tracker",
     "trinity", "trojan", "trouble", "tucker",
@@ -448,51 +448,46 @@ _BUILTIN_COMMON_PASSWORDS: frozenset[str] = _expand_builtin_passwords(
     _RAW_BUILTIN_COMMON_PASSWORDS
 )
 
-_MAX_COMMON_PASSWORDS_FILE_BYTES: int = 50 * 1024 * 1024  # 50 MB hard cap
+_MAX_COMMON_PASSWORDS_FILE_BYTES: int = 50 * 1024 * 1024       # 50 MB
+_MAX_COMMON_PASSWORDS_FILE_CHARS: int = _MAX_COMMON_PASSWORDS_FILE_BYTES // 4
 
 def _load_common_passwords() -> frozenset[str]:
     """Load common passwords from an external file, falling back to the built-in set."""
     data_path = _pathlib.Path(__file__).parent / "data" / "common_passwords.txt"
 
     if not data_path.exists():
-        _logger.warning(
+        _logger.error(
             "Common passwords data file not found at %s. "
             "Using the built-in fallback list (%d variant entries). "
             "For proper coverage, ship data/common_passwords.txt with at least "
-            "the SecLists top-10 000 password list.",
+            "the SecLists top-10 000 password list "
+            "(https://github.com/danielmiessler/SecLists).",
             data_path,
-            len(_BUILTIN_COMMON_PASSWORDS),
-        )
-        return _BUILTIN_COMMON_PASSWORDS
-
-    try:
-        file_size = data_path.stat().st_size
-    except OSError as exc:
-        _logger.warning(
-            "Could not stat common passwords file at %s (%s). "
-            "Falling back to the built-in list (%d variant entries).",
-            data_path, exc, len(_BUILTIN_COMMON_PASSWORDS),
-        )
-        return _BUILTIN_COMMON_PASSWORDS
-
-    if file_size > _MAX_COMMON_PASSWORDS_FILE_BYTES:
-        _logger.warning(
-            "Common passwords file at %s is %.1f MB, which exceeds the %d MB "
-            "safety cap. Falling back to the built-in list (%d variant entries). "
-            "Split the file or raise _MAX_COMMON_PASSWORDS_FILE_BYTES if intentional.",
-            data_path,
-            file_size / 1_048_576,
-            _MAX_COMMON_PASSWORDS_FILE_BYTES // 1_048_576,
             len(_BUILTIN_COMMON_PASSWORDS),
         )
         return _BUILTIN_COMMON_PASSWORDS
 
     entries_set: set[str] = set()
-    raw_count = 0
+    raw_count   = 0
 
     try:
+        total_chars = 0
         with data_path.open("r", encoding="utf-8") as fh:
             for raw_line in fh:
+                total_chars += len(raw_line)
+                if total_chars > _MAX_COMMON_PASSWORDS_FILE_CHARS:
+                    _logger.warning(
+                        "Common passwords file at %s exceeded the %d MB safety "
+                        "cap mid-read (~%d chars consumed so far). "
+                        "Falling back to the built-in list (%d variant entries). "
+                        "Split the file or raise _MAX_COMMON_PASSWORDS_FILE_BYTES "
+                        "if intentional.",
+                        data_path,
+                        _MAX_COMMON_PASSWORDS_FILE_BYTES // 1_048_576,
+                        total_chars,
+                        len(_BUILTIN_COMMON_PASSWORDS),
+                    )
+                    return _BUILTIN_COMMON_PASSWORDS
                 raw_entry = raw_line.strip()
                 if not raw_entry:
                     continue
@@ -526,27 +521,21 @@ def _load_common_passwords() -> frozenset[str]:
     )
     return result
 
-_COMMON_PASSWORDS_CACHE: frozenset[str] | None  = None
-_COMMON_PASSWORDS_ERROR: Exception | None       = None
-_COMMON_PASSWORDS_LOCK:  _threading.Lock        = _threading.Lock()
+_COMMON_PASSWORDS_CACHE: frozenset[str] | None = None
+_COMMON_PASSWORDS_LOCK:  _threading.Lock       = _threading.Lock()
 
 def get_common_passwords() -> frozenset[str]:
     """Return the merged common-password frozenset, loading it on first call."""
-    global _COMMON_PASSWORDS_CACHE, _COMMON_PASSWORDS_ERROR
+    global _COMMON_PASSWORDS_CACHE
 
-    # Fast paths — no lock needed once the outcome (success or failure) is known.
     if _COMMON_PASSWORDS_CACHE is not None:
         return _COMMON_PASSWORDS_CACHE
-    if _COMMON_PASSWORDS_ERROR is not None:
-        raise _COMMON_PASSWORDS_ERROR
 
     with _COMMON_PASSWORDS_LOCK:
         # Re-check under the lock: another thread may have completed
-        # initialisation (or recorded an error) while this thread was waiting.
+        # initialisation while this thread was waiting.
         if _COMMON_PASSWORDS_CACHE is not None:
             return _COMMON_PASSWORDS_CACHE
-        if _COMMON_PASSWORDS_ERROR is not None:
-            raise _COMMON_PASSWORDS_ERROR
         try:
             loaded = _load_common_passwords()
 
@@ -594,8 +583,19 @@ def get_common_passwords() -> frozenset[str]:
             _COMMON_PASSWORDS_CACHE = loaded
 
         except Exception as exc:
-            # Store the exception so subsequent calls fail fast without retrying.
-            _COMMON_PASSWORDS_ERROR = exc
-            raise
+            _logger.warning(
+                "Unexpected error while loading or validating the common passwords "
+                "list (%s: %s). Falling back to the built-in list (%d variant "
+                "entries). The tool will continue to function with reduced coverage.",
+                type(exc).__name__,
+                exc,
+                len(_BUILTIN_COMMON_PASSWORDS),
+            )
+            _COMMON_PASSWORDS_CACHE = _BUILTIN_COMMON_PASSWORDS
 
+    if _COMMON_PASSWORDS_CACHE is None:  # pragma: no cover
+        raise RuntimeError(
+            "Unreachable: _COMMON_PASSWORDS_CACHE must have been set inside the "
+            "lock block before this point is reached."
+        )
     return _COMMON_PASSWORDS_CACHE
