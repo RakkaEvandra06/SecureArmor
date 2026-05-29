@@ -10,6 +10,7 @@ class SkipReason(str, Enum):
 
     COMMON_PASSWORD_DETECTED   = "common_password_detected"
     REPETITION_PENALTY_APPLIED = "repetition_penalty_applied"
+    UNICODE_ONLY_PASSWORD      = "unicode_only_password"
 
 @dataclass(frozen=True)
 class CriterionResult:
