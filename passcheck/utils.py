@@ -59,9 +59,9 @@ _LEET_TABLE: dict[int, str] = str.maketrans({
     "8": "b",   # 8ball  → bball
     "0": "o",
     "5": "s", "$": "s",
+    "2": "s",   # pa22word → password
     "7": "t",
     "+": "t",   # s+rong → strong
-    "2": "z",   # pa22word → password
     "(": "c",   # (hocolate → chocolate
 })
 
