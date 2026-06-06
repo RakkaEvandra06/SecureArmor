@@ -21,9 +21,9 @@ class CriterionResult:
     score:       int
     max_score:   int
     detail:      str
-    suggestion:  str            = ""
-    skipped:     bool           = False
-    skip_reason: str            = ""
+    suggestion:  str              = ""
+    skipped:     bool             = False
+    skip_reason: SkipReason | str = ""
 
     def __post_init__(self) -> None:
         self._validate_score_bounds()
@@ -146,3 +146,11 @@ class PasswordAnalysis:
     def total_criteria(self) -> int:
         """Number of criteria that were actually evaluated (skipped excluded)."""
         return sum(1 for c in self.criteria if not c.skipped)
+
+    @property
+    def effective_score(self) -> int:
+        """Score normalised to [0, 100] relative to the effective maximum."""
+        eff_max = sum(c.max_score for c in self.criteria if not c.skipped)
+        if eff_max == 0:
+            return 0
+        return round(self.score / eff_max * 100)
