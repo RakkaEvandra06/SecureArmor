@@ -56,6 +56,16 @@ if not (2 <= _EFFECTIVE_POOL_VARIETY_FACTOR <= 16):
         "the validated range [2, 16]; adjust the constant and this guard together."
     )
 
+_EXPECTED_CLASS_FLAG_COUNT: int = 5
+if _EXPECTED_CLASS_FLAG_COUNT != CHAR_CLASS_COUNT:
+    raise ValueError(
+        f"_check_char_variety() enumerates {_EXPECTED_CLASS_FLAG_COUNT} class flags "
+        f"but CHAR_CLASS_COUNT={CHAR_CLASS_COUNT}. "
+        "Update the class_flags tuple in _check_char_variety() and "
+        "CHAR_CLASS_COUNT in constants.py together."
+    )
+del _EXPECTED_CLASS_FLAG_COUNT
+
 # ---------------------------------------------------------------------------
 # Character profile
 # ---------------------------------------------------------------------------
@@ -122,19 +132,22 @@ class _CharProfile:
 
 def _non_ascii_pool_size(char_counts: MappingProxyType[str, int]) -> int:
     """Estimate the alphabet pool size contributed by non-ASCII characters."""
-    max_ord = max(
-        (ord(c) for c in char_counts if ord(c) > 127),
-        default=0,
-    )
-    if max_ord == 0:
+    non_ascii = [c for c in char_counts if ord(c) > 127]
+    if not non_ascii:
         return 0
-    if max_ord < 0x0250:   # Latin-1 Supplement + Latin Extended-A/B
-        return 128
-    if max_ord < 0x0500:   # IPA Ext, Greek, Cyrillic, …
-        return 256
-    if max_ord < 0x4E00:   # Arabic, Hebrew, misc scripts
-        return 512
-    return 1024            # CJK Unified Ideographs and beyond
+    unique_count = len(non_ascii)
+    max_ord      = max(ord(c) for c in non_ascii)
+    if max_ord < 0x0250:    # Latin-1 Supplement + Latin Extended-A/B
+        range_cap = 128
+    elif max_ord < 0x0500:  # IPA Ext, Greek, Cyrillic, …
+        range_cap = 256
+    elif max_ord < 0x4E00:  # Arabic, Hebrew, misc scripts
+        range_cap = 512
+    else:                   # CJK Unified Ideographs and beyond
+        range_cap = 1024
+    # Cap by unique_count × factor — prevents a single high-ordinal character
+    # from claiming a disproportionately large pool contribution.
+    return min(range_cap, unique_count * _EFFECTIVE_POOL_VARIETY_FACTOR)
 
 # ---------------------------------------------------------------------------
 # Analyser
@@ -147,6 +160,9 @@ class PasswordAnalyzer:
         """Analyse *password* and return a fully-populated :class:`PasswordAnalysis`."""
         if not password:
             raise ValueError("Password must not be empty.")
+
+        password = unicodedata.normalize("NFC", password)
+
         if len(password) > LENGTH_MAXIMUM:
             raise ValueError(
                 f"Password length {len(password)} exceeds the maximum "
@@ -177,9 +193,10 @@ class PasswordAnalyzer:
             password,
             keyboard_note=keyboard_note,
         )
+        _common_detected = not common_result.skipped and not common_result.passed
         keyboard_result = self._check_no_keyboard_pattern(
             password,
-            skip=not common_result.passed,
+            skip=_common_detected,
             found=_kp_found,                # reuse the already-computed list
         )
 
@@ -203,7 +220,7 @@ class PasswordAnalyzer:
 
         score = min(100, raw_score)
 
-        if not common_result.passed:
+        if not common_result.skipped and not common_result.passed:
             score = min(score, _COMMON_PASSWORD_SCORE_CAP)
 
         label, color = self._strength_band(score)
@@ -356,7 +373,7 @@ class PasswordAnalyzer:
             key            = "has_special",
             name           = "Special characters",
             present        = profile.has_special,
-            detail_present = "Contains special characters",
+            detail_present = "Contains special characters (spaces also qualify)",
             detail_absent  = "No special characters found",
             suggestion     = "Add special characters such as: ! @ # $ % ^ & *",
         )
@@ -374,14 +391,6 @@ class PasswordAnalyzer:
             profile.has_special,
             profile.has_non_ascii,
         )
-
-        if len(class_flags) != CHAR_CLASS_COUNT:
-            raise ValueError(
-                f"class_flags has {len(class_flags)} elements but "
-                f"CHAR_CLASS_COUNT={CHAR_CLASS_COUNT}. "
-                "Update _check_char_variety() and CHAR_CLASS_COUNT in constants.py together."
-            )
-
         class_count   = sum(class_flags)
         total_classes = len(class_flags)
         passed = class_count >= CHAR_VARIETY_MIN_CLASSES
@@ -512,7 +521,8 @@ class PasswordAnalyzer:
             score      = w if passed else 0,
             max_score  = w,
             detail     = (
-                f"Keyboard patterns detected: {', '.join(display)}{suffix}"
+                f"Keyboard patterns detected: "
+                f"{', '.join(repr(p) for p in display)}{suffix}"
                 if not passed
                 else "No obvious keyboard patterns detected"
             ),
