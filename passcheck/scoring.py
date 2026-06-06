@@ -6,8 +6,6 @@ from typing import TypedDict
 from .models import CriterionResult, PasswordAnalysis
 from .utils import is_utf_terminal as _is_utf_terminal
 
-_UTF_TERMINAL: bool = _is_utf_terminal()
-
 class _CriterionSummary(TypedDict):
     """JSON-serialisable summary for a single criterion."""
 
@@ -48,10 +46,9 @@ def score_bar(score: int, width: int = 20) -> str:
 
     score  = max(0, min(100, score))
     filled = min(width, round(score / 100 * width))
-
-    # FIX D-01: Use the module-level cached result instead of calling
-    # _is_utf_terminal() on each invocation.
-    if _UTF_TERMINAL:
+    if score > 0 and filled == 0:
+        filled = 1
+    if _is_utf_terminal():
         fill_char, empty_char = "█", "░"
     else:
         fill_char, empty_char = "#", "-"
