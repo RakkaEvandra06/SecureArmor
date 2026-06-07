@@ -37,19 +37,21 @@ _MASK_SINGLE_EDGE_BELOW: int = 8
 
 def masked_password(password: str) -> str:
     """Return a display-safe masked version of *password*."""
-    length = len(password)
+    chars  = list(password)
+    length = len(chars)
     if length < _MASK_FULL_BELOW:
         # Fully mask very short passwords — revealing any character would expose
         # too large a fraction (e.g. 2/4 = 50 %) for an already-weak password.
         return "*" * length
     if length < _MASK_SINGLE_EDGE_BELOW:
         # Show only the first character; the remainder is masked.
-        return password[0] + "*" * (length - 1)
+        return chars[0] + "*" * (length - 1)
     # Standard display: first and last characters visible.
-    return password[0] + "*" * (length - 2) + password[-1]
+    return chars[0] + "*" * (length - 2) + chars[-1]
 
 _LEET_TABLE: dict[int, str] = str.maketrans({
     "@": "a", "4": "a",
+    "2": "z",   # zeu2 → zeus
     "3": "e",
     "1": "i",   # adm1n  → admin
     "!": "i",   # pass!on → passion
@@ -59,7 +61,6 @@ _LEET_TABLE: dict[int, str] = str.maketrans({
     "8": "b",   # 8ball  → bball
     "0": "o",
     "5": "s", "$": "s",
-    "2": "s",   # pa22word → password
     "7": "t",
     "+": "t",   # s+rong → strong
     "(": "c",   # (hocolate → chocolate
@@ -73,7 +74,7 @@ _PUNCTUATION_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
 
 def normalise_for_lookup(pw: str) -> tuple[str, str, str, str, str]:
     """Return five distinct lookup keys for common-password detection."""
-    nfkd     = unicodedata.normalize("NFKD", pw.lower())
+    nfkd     = unicodedata.normalize("NFKD", pw.casefold())
     ascii_pw = nfkd.encode("ascii", errors="ignore").decode("ascii")
 
     stripped            = ascii_pw.strip(_PUNCTUATION_CHARS)
