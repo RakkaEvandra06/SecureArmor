@@ -439,7 +439,7 @@ def _expand_builtin_passwords(raw: frozenset[str]) -> frozenset[str]:
     """Expand each raw entry into all five normalised lookup variants."""
     expanded: set[str] = set()
     for entry in raw:
-        expanded.update(_normalise_for_lookup(entry))
+        expanded.update(v for v in _normalise_for_lookup(entry) if v)
     return frozenset(expanded)
 
 # The publicly used set — every entry stored as all five normalised variants
@@ -477,13 +477,14 @@ def _load_common_passwords() -> frozenset[str]:
                 total_chars += len(raw_line)
                 if total_chars > _MAX_COMMON_PASSWORDS_FILE_CHARS:
                     _logger.warning(
-                        "Common passwords file at %s exceeded the %d MB safety "
-                        "cap mid-read (~%d chars consumed so far). "
+                        "Common passwords file at %s exceeded the safety cap "
+                        "(~%d MB / ~%d M characters) mid-read (~%d chars consumed so far). "
                         "Falling back to the built-in list (%d variant entries). "
-                        "Split the file or raise _MAX_COMMON_PASSWORDS_FILE_BYTES "
+                        "Split the file or raise _MAX_COMMON_PASSWORDS_FILE_CHARS "
                         "if intentional.",
                         data_path,
-                        _MAX_COMMON_PASSWORDS_FILE_BYTES // 1_048_576,
+                        _MAX_COMMON_PASSWORDS_FILE_BYTES // (1024 * 1024),
+                        _MAX_COMMON_PASSWORDS_FILE_CHARS // 1_000_000,
                         total_chars,
                         len(_BUILTIN_COMMON_PASSWORDS),
                     )
@@ -495,13 +496,13 @@ def _load_common_passwords() -> frozenset[str]:
                 ascii_lower, stripped, leet_full, stripped_normalised, reversed_leet = (
                     _normalise_for_lookup(raw_entry)
                 )
-                entries_set.update({
-                    ascii_lower,
-                    stripped,
-                    leet_full,
-                    stripped_normalised,
-                    reversed_leet,
-                })
+                entries_set.update(
+                    v for v in (
+                        ascii_lower, stripped, leet_full,
+                        stripped_normalised, reversed_leet,
+                    )
+                    if v
+                )
     except (OSError, UnicodeDecodeError) as exc:
         _logger.warning(
             "Could not read common passwords from %s (%s). "
@@ -527,13 +528,7 @@ _COMMON_PASSWORDS_LOCK:  _threading.Lock       = _threading.Lock()
 def get_common_passwords() -> frozenset[str]:
     """Return the merged common-password frozenset, loading it on first call."""
     global _COMMON_PASSWORDS_CACHE
-
-    if _COMMON_PASSWORDS_CACHE is not None:
-        return _COMMON_PASSWORDS_CACHE
-
     with _COMMON_PASSWORDS_LOCK:
-        # Re-check under the lock: another thread may have completed
-        # initialisation while this thread was waiting.
         if _COMMON_PASSWORDS_CACHE is not None:
             return _COMMON_PASSWORDS_CACHE
         try:
@@ -593,9 +588,6 @@ def get_common_passwords() -> frozenset[str]:
             )
             _COMMON_PASSWORDS_CACHE = _BUILTIN_COMMON_PASSWORDS
 
-    if _COMMON_PASSWORDS_CACHE is None:  # pragma: no cover
-        raise RuntimeError(
-            "Unreachable: _COMMON_PASSWORDS_CACHE must have been set inside the "
-            "lock block before this point is reached."
-        )
-    return _COMMON_PASSWORDS_CACHE
+        # Return from inside the lock — _COMMON_PASSWORDS_CACHE is guaranteed
+        # to be set by both branches of the try/except above.
+        return _COMMON_PASSWORDS_CACHE
