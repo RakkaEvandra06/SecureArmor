@@ -10,6 +10,7 @@ from enum import IntEnum
 import click
 
 from .analyzer import PasswordAnalyzer
+from . import __version__
 from .display import (
     print_analysis,
     print_analysis_json,
@@ -39,9 +40,9 @@ _DEFAULT_INTERACTIVE_RATE_LIMIT_MS: float = 50.0
 _INSECURE_FLAG_WARNING: str = (
     "WARNING: The --password flag is inherently insecure.\n"
     "  • Your shell records the value in its history file.\n"
-    "  • The OS writes the full command line to /proc/<pid>/cmdline before\n"
-    "    any Python code runs in-process scrubbing cannot undo this.\n"
-    "  • Other users can read it via 'ps aux' during process execution.\n"
+    "  • Every major OS exposes process command-line arguments before any\n"
+    "    Python code runs — they are visible to other users and monitoring\n"
+    "    tools (Task Manager, Activity Monitor, ps, /proc/<pid>/cmdline …).\n"
     "Use the interactive prompt (run 'passcheck' with no flags) for secure input.\n"
 )
 
@@ -65,6 +66,7 @@ def _emit_json(obj: dict[str, object]) -> None:
     invoke_without_command=True,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+@click.version_option(__version__, "-V", "--version", prog_name="passcheck")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """PassCheck — Password Strength Analyser."""
@@ -101,7 +103,8 @@ def cli(ctx: click.Context) -> None:
     default=_DEFAULT_INTERACTIVE_RATE_LIMIT_MS,
     show_default=True,
     help=(
-        "Milliseconds to wait between analyses in interactive mode "
+        "Milliseconds to wait before each analysis. "
+        "Applies in all modes: --password flag, interactive loop, and batch. "
         f"(default: {_DEFAULT_INTERACTIVE_RATE_LIMIT_MS:.0f} ms). "
         "Set to 0 to disable throttling."
     ),
@@ -114,6 +117,8 @@ def check(
     """Analyse a single password."""
     if password is not None:
         _warn_insecure_flag()
+        if rate_limit_ms > 0:
+            time.sleep(rate_limit_ms / 1000.0)
         _run_analysis(password, output_json=output_json)
     elif not sys.stdin.isatty():
         click.echo(
@@ -170,6 +175,7 @@ def _warn_invalid_password(
     *,
     output_json: bool,
     exc: SystemExit | None = None,
+    line_num: int = 0,
 ) -> None:
     """Emit a per-line warning for passwords that could not be analysed."""
     reason: str = ""
@@ -182,30 +188,38 @@ def _warn_invalid_password(
     if output_json:
         _emit_json({
             "event":  "skipped_invalid",
+            "line":   line_num,
             "length": len(pw),
             "limit":  LENGTH_MAXIMUM,
             "detail": reason,
         })
     else:
-        click.echo(f"Warning: skipped password {reason}", err=True)
-
+        loc = f"line {line_num}: " if line_num else ""
+        click.echo(f"Warning: {loc}{reason}", err=True)
 
 def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
     """Stream analysis results for all passwords arriving on stdin."""
     found_any = False
     need_sep  = False
+    line_num  = 0
     try:
         for pw in _stdin_passwords(output_json=output_json):
+            line_num += 1
             found_any = True
             if not output_json and need_sep:
                 print_separator()
             need_sep = True
+            if rate_limit_s > 0:
+                time.sleep(rate_limit_s)
             try:
                 _run_analysis(pw, output_json=output_json)
             except SystemExit as exc:
-                _warn_invalid_password(pw, output_json=output_json, exc=exc)
-            if rate_limit_s > 0:
-                time.sleep(rate_limit_s)
+                _warn_invalid_password(
+                    pw,
+                    output_json=output_json,
+                    exc=exc,
+                    line_num=line_num,
+                )
     except KeyboardInterrupt:
         click.echo("\nInterrupted.", err=True)
         raise SystemExit(_ExitCode.OK)
