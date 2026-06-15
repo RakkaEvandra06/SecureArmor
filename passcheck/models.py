@@ -21,11 +21,19 @@ class CriterionResult:
     score:       int
     max_score:   int
     detail:      str
-    suggestion:  str              = ""
-    skipped:     bool             = False
-    skip_reason: SkipReason | str = ""
+    suggestion:  str                = ""
+    skipped:     bool               = False
+    skip_reason: SkipReason | None  = None
 
     def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError(
+                "CriterionResult.name must be a non-empty, non-whitespace string."
+            )
+        if not self.detail.strip():
+            raise ValueError(
+                "CriterionResult.detail must be a non-empty, non-whitespace string."
+            )
         self._validate_score_bounds()
         self._validate_passed_consistency()
         self._validate_skipped_consistency()
@@ -78,9 +86,9 @@ class CriterionResult:
     def _validate_skipped_consistency(self) -> None:
         """Enforce invariants that apply to skipped criteria."""
         if not self.skipped:
-            if self.skip_reason:
+            if self.skip_reason is not None:
                 raise ValueError(
-                    "CriterionResult.skip_reason must be empty when skipped=False, "
+                    "CriterionResult.skip_reason must be None when skipped=False, "
                     f"got {self.skip_reason!r}. "
                     "Set skip_reason only together with skipped=True."
                 )
@@ -119,7 +127,7 @@ class PasswordAnalysis:
     strength_color:  str
     criteria:        tuple[CriterionResult, ...] = field(default=())
     entropy_bits:    float                        = 0.0
-    suggestions:     tuple[str, ...]             = field(default=())
+    suggestions:     tuple[str, ...]              = field(default=())
 
     def __post_init__(self) -> None:
         if self.password_length < 0:
@@ -127,15 +135,57 @@ class PasswordAnalysis:
                 f"PasswordAnalysis.password_length must be non-negative, "
                 f"got {self.password_length!r}."
             )
-        if not (0 <= self.score <= 100):
+
+        if self.score < 0:
             raise ValueError(
-                f"PasswordAnalysis.score must be in [0, 100], got {self.score!r}."
+                f"PasswordAnalysis.score must be non-negative, got {self.score!r}."
             )
+
         if self.strength_color not in _VALID_COLOUR_KEYS:
             raise ValueError(
                 f"PasswordAnalysis.strength_color {self.strength_color!r} is not a "
                 f"recognised colour key. Valid keys: {sorted(_VALID_COLOUR_KEYS)}."
             )
+        if self.entropy_bits < 0.0:
+            raise ValueError(
+                f"PasswordAnalysis.entropy_bits must be non-negative, "
+                f"got {self.entropy_bits!r}."
+            )
+        if not self.criteria:
+            raise ValueError(
+                "PasswordAnalysis.criteria must contain at least one "
+                "CriterionResult. An empty tuple indicates a programming "
+                "error in the analyzer."
+            )
+
+        eff_max = sum(c.max_score for c in self.criteria if not c.skipped)
+
+        if eff_max > 0 and not (0 <= self.score <= eff_max):
+            raise ValueError(
+                f"PasswordAnalysis.score ({self.score}) must be in "
+                f"[0, effective_max_score ({eff_max})]. The analyzer must cap the "
+                "raw score at the sum of non-skipped criteria's max_score "
+                "values before constructing this model."
+            )
+
+        criteria_suggestions = frozenset(
+            c.suggestion
+            for c in self.criteria
+            if not c.passed and not c.skipped and c.suggestion
+        )
+        unexpected_suggestions = frozenset(self.suggestions) - criteria_suggestions
+        if unexpected_suggestions:
+            raise ValueError(
+                "PasswordAnalysis.suggestions contains entries that do not "
+                "correspond to any failed (non-skipped) criterion's "
+                f"suggestion: {sorted(unexpected_suggestions)!r}. Build "
+                "suggestions from the `suggestion` field of failed criteria."
+            )
+
+    @property
+    def effective_max_score(self) -> int:
+        """Sum of ``max_score`` values for all non-skipped criteria (computed on demand)."""
+        return sum(c.max_score for c in self.criteria if not c.skipped)
 
     @property
     def passed_count(self) -> int:
@@ -148,9 +198,9 @@ class PasswordAnalysis:
         return sum(1 for c in self.criteria if not c.skipped)
 
     @property
-    def effective_score(self) -> int:
-        """Score normalised to [0, 100] relative to the effective maximum."""
-        eff_max = sum(c.max_score for c in self.criteria if not c.skipped)
+    def score_percent(self) -> int:
+        """Score as a percentage of the effective maximum, in ``[0, 100]``."""
+        eff_max = self.effective_max_score   # call property; no cached field
         if eff_max == 0:
             return 0
-        return round(self.score / eff_max * 100)
+        return min(round(self.score / eff_max * 100), 100)
