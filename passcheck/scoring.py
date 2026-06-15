@@ -1,13 +1,26 @@
+"""Presentation-agnostic helpers derived from a :class:`~passcheck.models.PasswordAnalysis`."""
+
 from __future__ import annotations
 
-from collections.abc import Sequence
+import warnings
 from typing import TypedDict
 
-from .models import CriterionResult, PasswordAnalysis
-from .utils import is_utf_terminal as _is_utf_terminal
+from .models import PasswordAnalysis
 
-class _CriterionSummary(TypedDict):
-    """JSON-serialisable summary for a single criterion."""
+__all__ = [
+    "AnalysisSummary",
+    "CriterionSummary",
+    "criteria_summary",
+    "effective_max_score",
+    "score_bar",
+]
+
+# ---------------------------------------------------------------------------
+# JSON summary types
+# ---------------------------------------------------------------------------
+
+class CriterionSummary(TypedDict):
+    """JSON-serialisable view of a single :class:`~passcheck.models.CriterionResult`."""
 
     name:        str
     passed:      bool
@@ -16,72 +29,72 @@ class _CriterionSummary(TypedDict):
     max_score:   int
     detail:      str
     suggestion:  str
-    skip_reason: str
+    skip_reason: str | None
 
 class AnalysisSummary(TypedDict):
-    """Full JSON-serialisable summary produced by :func:`criteria_summary`."""
+    """JSON-serialisable view of a full :class:`~passcheck.models.PasswordAnalysis`."""
 
-    score:          int
-    strength:       str
-    entropy_bits:   float
-    passed:         int
-    total:          int
-    effective_max:  int
-    suggestions:    list[str]
-    criteria:       list[_CriterionSummary]
+    password_masked:     str
+    password_length:     int
+    score:               int
+    effective_max_score: int
+    score_percent:       int
+    strength_label:      str
+    strength_color:      str
+    entropy_bits:        float
+    passed_count:        int
+    total_criteria:      int
+    suggestions:         list[str]
+    criteria:            list[CriterionSummary]
 
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
 
-def score_bar(score: int, width: int = 20) -> str:
-    """Return a text progress bar representing *score* (0–100)."""
-    if isinstance(width, bool) or not isinstance(width, int):
-        raise TypeError(
-            f"score_bar() requires a plain int width, got {type(width).__name__!r}. "
-            "Pass a plain int such as score_bar(score, width=20)."
-        )
-    if width <= 0:
-        raise ValueError(f"score_bar() requires a positive width, got {width!r}.")
-
-    score  = max(0, min(100, score))
-    filled = min(width, round(score / 100 * width))
-    if score > 0 and filled == 0:
-        filled = 1
-    if _is_utf_terminal():
-        fill_char, empty_char = "█", "░"
-    else:
-        fill_char, empty_char = "#", "-"
-
-    return fill_char * filled + empty_char * (width - filled)
-
-def max_possible_score(criteria: Sequence[CriterionResult]) -> int:
-    """Return the sum of ``max_score`` values for all non-skipped criteria."""
-    return sum(c.max_score for c in criteria if not c.skipped)
-
-effective_max_score = max_possible_score
+def effective_max_score(analysis: PasswordAnalysis) -> int:
+    """Return the sum of ``max_score`` for every non-skipped criterion in *analysis*."""
+    warnings.warn(
+        "scoring.effective_max_score() is deprecated and will be removed in a "
+        "future release.  Use analysis.effective_max_score instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return analysis.effective_max_score
 
 def criteria_summary(analysis: PasswordAnalysis) -> AnalysisSummary:
-    """Return a typed, JSON-serialisable summary dict for *analysis*."""
+    """Return a JSON-serialisable summary of *analysis*."""
     return AnalysisSummary(
-        score         = analysis.score,
-        strength      = analysis.strength_label,
-        entropy_bits  = round(analysis.entropy_bits, 2),
-        passed        = analysis.passed_count,
-        total         = analysis.total_criteria,
-        effective_max = max_possible_score(analysis.criteria),
-        suggestions   = list(analysis.suggestions),
-        criteria      = [
-            _CriterionSummary(
-                name        = c.name,
-                passed      = c.passed,
-                skipped     = c.skipped,
-                score       = c.score,
-                max_score   = c.max_score,
-                detail      = c.detail,
-                suggestion  = c.suggestion,
-                skip_reason = c.skip_reason,
+        password_masked=analysis.password_masked,
+        password_length=analysis.password_length,
+        score=analysis.score,
+        effective_max_score=analysis.effective_max_score,
+        score_percent=analysis.score_percent,
+        strength_label=analysis.strength_label,
+        strength_color=analysis.strength_color,
+        entropy_bits=round(analysis.entropy_bits, 2),
+        passed_count=analysis.passed_count,
+        total_criteria=analysis.total_criteria,
+        suggestions=list(analysis.suggestions),
+        criteria=[
+            CriterionSummary(
+                name=c.name,
+                passed=c.passed,
+                skipped=c.skipped,
+                score=c.score,
+                max_score=c.max_score,
+                detail=c.detail,
+                suggestion=c.suggestion,
+                skip_reason=c.skip_reason.value if c.skip_reason is not None else None,
             )
             for c in analysis.criteria
         ],
     )
+
+def score_bar(percent: int, *, width: int = 20, utf: bool = True) -> str:
+    """Return a fixed-*width*-character progress bar representing *percent* (0-100)."""
+    clamped = max(0, min(percent, 100))
+    filled  = round(width * clamped / 100)
+    empty   = width - filled
+
+    fill_char, empty_char = ("█", "░") if utf else ("#", "-")
+    return fill_char * filled + empty_char * empty
