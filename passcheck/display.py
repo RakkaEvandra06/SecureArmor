@@ -2,20 +2,34 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from typing import TYPE_CHECKING
 
 import colorama
 from colorama import Fore, Style
 
-colorama.init(autoreset=True)
-
 from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 from .models import PasswordAnalysis
-from .scoring import criteria_summary, effective_max_score, score_bar
+from .scoring import criteria_summary, score_bar
 from .utils import is_utf_terminal as _is_utf_terminal
 
 if TYPE_CHECKING:
     from .models import CriterionResult
+
+_COLORAMA_LOCK:        threading.Lock = threading.Lock()
+_COLORAMA_INITIALISED: bool           = False
+
+def _ensure_colorama_init() -> None:
+    """Initialise colorama exactly once; thread-safe via double-checked locking."""
+    global _COLORAMA_INITIALISED
+    # Fast path: if already initialised, no lock acquisition needed.
+    if not _COLORAMA_INITIALISED:
+        with _COLORAMA_LOCK:
+            # Re-check inside the lock: another thread may have completed
+            # initialisation while we were waiting to acquire it.
+            if not _COLORAMA_INITIALISED:
+                colorama.init(autoreset=True)
+                _COLORAMA_INITIALISED = True
 
 # ---------------------------------------------------------------------------
 # Layout constants
@@ -90,6 +104,7 @@ def _rjust_ansi(s: str, width: int) -> str:
 
 def print_analysis(analysis: PasswordAnalysis) -> None:
     """Render a full human-readable analysis block to stdout."""
+    _ensure_colorama_init()
     _print_header(analysis)
     _print_score_panel(analysis)
     _print_criteria_table(analysis)
@@ -102,6 +117,7 @@ def print_analysis_json(analysis: PasswordAnalysis) -> None:
 
 def print_banner() -> None:
     """Print the PassCheck welcome banner to stdout."""
+    _ensure_colorama_init()
     if _UTF_TERMINAL:
         tl, tr, bl, br, h, v = "╔", "╗", "╚", "╝", "═", "║"
     else:
@@ -119,6 +135,7 @@ def print_banner() -> None:
 
 def print_separator() -> None:
     """Print a horizontal rule between analysis blocks."""
+    _ensure_colorama_init()
     char = "─" if _UTF_TERMINAL else "-"
     print(_dim(char * _SEPARATOR_WIDTH))
 
@@ -135,12 +152,12 @@ def _print_header(analysis: PasswordAnalysis) -> None:
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
     """Print the score bar, strength label, entropy, and criteria counts."""
-    color   = analysis.strength_color
-    score   = analysis.score
-    eff_max = effective_max_score(analysis.criteria)
-    denom   = str(eff_max) if eff_max < 100 else "100"
+    color = analysis.strength_color
+    score = analysis.score
+    eff_max = analysis.effective_max_score
+    denom   = str(eff_max)
     bar_pct = round(score / eff_max * 100) if eff_max > 0 else 0
-    bar     = score_bar(bar_pct, width=24)
+    bar     = score_bar(bar_pct, width=24, utf=_UTF_TERMINAL)
 
     print()
     print(
@@ -168,24 +185,20 @@ def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     print(_dim("  " + rule_char * (_SEPARATOR_WIDTH - 2)))
 
     for criterion in analysis.criteria:
-        icon, score_cell = _format_criterion_status(criterion, utf=_UTF_TERMINAL)
+        icon, score_cell = _format_criterion_status(criterion)
         name_col  = _ljust_ansi(criterion.name[:col], col)
         score_col = _rjust_ansi(score_cell, 8)
         print(f"  {icon}   {name_col}  {score_col}  {_dim(criterion.detail)}")
 
     print()
 
-def _format_criterion_status(
-    criterion: CriterionResult,
-    *,
-    utf: bool,
-) -> tuple[str, str]:
+def _format_criterion_status(criterion: CriterionResult) -> tuple[str, str]:
     """Return ``(icon, score_cell)`` strings for a single criterion row."""
     if criterion.skipped:
-        return _coloured("⊘" if utf else "~", "yellow"), _dim("   —   ")
+        return _coloured("⊘" if _UTF_TERMINAL else "~", "yellow"), _dim("   —   ")
     if criterion.passed:
-        return _coloured("✔" if utf else "+", "green"), _coloured(f"+{criterion.score}", "green")
-    return _coloured("✘" if utf else "x", "red"), _dim(f"+{criterion.score}/{criterion.max_score}")
+        return _coloured("✔" if _UTF_TERMINAL else "+", "green"), _coloured(f"+{criterion.score}", "green")
+    return _coloured("✘" if _UTF_TERMINAL else "x", "red"), _dim(f"+{criterion.score}/{criterion.max_score}")
 
 def _print_suggestions(analysis: PasswordAnalysis) -> None:
     """Print the numbered suggestion list."""
