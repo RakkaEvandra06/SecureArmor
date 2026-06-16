@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import logging as _logging
-import pathlib as _pathlib
+import logging  as _logging
+import pathlib  as _pathlib
+import random   as _random
 import threading as _threading
 from types import MappingProxyType
 
@@ -14,11 +15,14 @@ __all__ = [
     "LENGTH_EXCELLENT",
     "LENGTH_MAXIMUM",
     "ENTROPY_GOOD_THRESHOLD",
+    "NON_ASCII_POOL_SIZE",
     "REPEATED_CHAR_RATIO",
     "SHANNON_WEIGHT",
     "STRENGTH_BANDS",
     "VALID_COLOUR_KEYS",
     "SPECIAL_CHARS",
+    "SPECIAL_CHARS_SET",
+    "SPECIAL_CHARS_INCLUDES_SPACE",
     "KEYBOARD_PATTERNS",
     "get_common_passwords",
     "CHAR_UNIQUENESS_MIN_RATIO",
@@ -114,6 +118,8 @@ SHANNON_WEIGHT: float = 0.6   # blend factor: 40 % pool, 60 % Shannon
 if not (0.0 < SHANNON_WEIGHT < 1.0):
     raise ValueError(f"SHANNON_WEIGHT must be in (0, 1), got {SHANNON_WEIGHT!r}.")
 
+NON_ASCII_POOL_SIZE: int = 32_768
+
 # ---------------------------------------------------------------------------
 # Repeated-character threshold
 # ---------------------------------------------------------------------------
@@ -183,6 +189,8 @@ VALID_COLOUR_KEYS: frozenset[str] = frozenset(colour for _, _, colour in STRENGT
 # ---------------------------------------------------------------------------
 
 SPECIAL_CHARS: str = """ !"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
+SPECIAL_CHARS_INCLUDES_SPACE: bool = " " in SPECIAL_CHARS
+SPECIAL_CHARS_SET: frozenset[str] = frozenset(SPECIAL_CHARS)
 
 # ---------------------------------------------------------------------------
 # Keyboard walk patterns
@@ -436,27 +444,25 @@ if _non_canonical:
 del _non_canonical
 
 def _expand_builtin_passwords(raw: frozenset[str]) -> frozenset[str]:
-    """Expand each raw entry into all five normalised lookup variants."""
+    """Expand each raw entry into all normalised lookup variants."""
     expanded: set[str] = set()
     for entry in raw:
         expanded.update(v for v in _normalise_for_lookup(entry) if v)
     return frozenset(expanded)
 
-# The publicly used set — every entry stored as all five normalised variants
-# so the fallback path is detection-equivalent to the file-loading path.
 _BUILTIN_COMMON_PASSWORDS: frozenset[str] = _expand_builtin_passwords(
     _RAW_BUILTIN_COMMON_PASSWORDS
 )
 
-_MAX_COMMON_PASSWORDS_FILE_BYTES: int = 50 * 1024 * 1024       # 50 MB
-_MAX_COMMON_PASSWORDS_FILE_CHARS: int = _MAX_COMMON_PASSWORDS_FILE_BYTES // 4
+_MAX_COMMON_PASSWORDS_FILE_BYTES: int = 50 * 1024 * 1024  # 50 MB
+_MIN_EXPECTED_COMMON_PASSWORDS: int = 100
 
 def _load_common_passwords() -> frozenset[str]:
     """Load common passwords from an external file, falling back to the built-in set."""
     data_path = _pathlib.Path(__file__).parent / "data" / "common_passwords.txt"
 
     if not data_path.exists():
-        _logger.error(
+        _logger.warning(
             "Common passwords data file not found at %s. "
             "Using the built-in fallback list (%d variant entries). "
             "For proper coverage, ship data/common_passwords.txt with at least "
@@ -471,39 +477,43 @@ def _load_common_passwords() -> frozenset[str]:
     raw_count   = 0
 
     try:
-        total_chars = 0
-        with data_path.open("r", encoding="utf-8") as fh:
-            for raw_line in fh:
-                total_chars += len(raw_line)
-                if total_chars > _MAX_COMMON_PASSWORDS_FILE_CHARS:
+        total_bytes = 0
+        with data_path.open("rb") as fh:
+            for raw_line_bytes in fh:
+                total_bytes += len(raw_line_bytes)
+                if total_bytes > _MAX_COMMON_PASSWORDS_FILE_BYTES:
                     _logger.warning(
                         "Common passwords file at %s exceeded the safety cap "
-                        "(~%d MB / ~%d M characters) mid-read (~%d chars consumed so far). "
-                        "Falling back to the built-in list (%d variant entries). "
-                        "Split the file or raise _MAX_COMMON_PASSWORDS_FILE_CHARS "
-                        "if intentional.",
+                        "(~%d MB) after reading ~%d bytes. "
+                        "Using the %d entries loaded so far, merged with the "
+                        "built-in list.  Split the file or raise "
+                        "_MAX_COMMON_PASSWORDS_FILE_BYTES if intentional.",
                         data_path,
                         _MAX_COMMON_PASSWORDS_FILE_BYTES // (1024 * 1024),
-                        _MAX_COMMON_PASSWORDS_FILE_CHARS // 1_000_000,
-                        total_chars,
-                        len(_BUILTIN_COMMON_PASSWORDS),
+                        total_bytes,
+                        len(entries_set),
                     )
-                    return _BUILTIN_COMMON_PASSWORDS
+                    break
+
+                # Decode each line individually so a single bad line doesn't
+                # abort the entire load (graceful degradation).
+                try:
+                    raw_line = raw_line_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    _logger.debug(
+                        "Skipped a line in %s that could not be decoded as UTF-8.",
+                        data_path,
+                    )
+                    continue
+
                 raw_entry = raw_line.strip()
                 if not raw_entry:
                     continue
                 raw_count += 1
-                ascii_lower, stripped, leet_full, stripped_normalised, reversed_leet = (
-                    _normalise_for_lookup(raw_entry)
-                )
-                entries_set.update(
-                    v for v in (
-                        ascii_lower, stripped, leet_full,
-                        stripped_normalised, reversed_leet,
-                    )
-                    if v
-                )
-    except (OSError, UnicodeDecodeError) as exc:
+
+                entries_set.update(_normalise_for_lookup(raw_entry))
+
+    except (OSError, ValueError) as exc:
         _logger.warning(
             "Could not read common passwords from %s (%s). "
             "Falling back to the built-in list (%d variant entries).",
@@ -522,15 +532,55 @@ def _load_common_passwords() -> frozenset[str]:
     )
     return result
 
+def _debug_log_pattern_overlaps(
+    loaded: frozenset[str],
+    *,
+    sample_size: int = 500,
+    seed:        int = 42,
+) -> None:
+    """Log keyboard-pattern / common-password overlaps using a deterministic sample."""
+    _rng    = _random.Random(seed)
+    sample  = _rng.sample(sorted(loaded), min(sample_size, len(loaded)))
+    overlaps = [
+        (pattern, entry)
+        for pattern in KEYBOARD_PATTERNS
+        for entry in sample
+        if pattern in entry and pattern != entry
+    ]
+    if overlaps:
+        preview    = overlaps[:10]
+        extra      = len(overlaps) - len(preview)
+        extra_note = f"\n  ...and {extra} more" if extra else ""
+        _logger.debug(
+            "KEYBOARD_PATTERNS substrings found inside COMMON_PASSWORDS sample "
+            "(double penalty handled by skip logic):\n%s%s",
+            "\n".join(
+                f"  pattern {p!r} found inside common password {e!r}"
+                for p, e in preview
+            ),
+            extra_note,
+        )
+
+# ---------------------------------------------------------------------------
+# Common-password cache
+# ---------------------------------------------------------------------------
+
 _COMMON_PASSWORDS_CACHE: frozenset[str] | None = None
 _COMMON_PASSWORDS_LOCK:  _threading.Lock       = _threading.Lock()
 
 def get_common_passwords() -> frozenset[str]:
     """Return the merged common-password frozenset, loading it on first call."""
     global _COMMON_PASSWORDS_CACHE
+
+    if _COMMON_PASSWORDS_CACHE is not None:
+        return _COMMON_PASSWORDS_CACHE
+
     with _COMMON_PASSWORDS_LOCK:
+        # Re-check inside the lock: another thread may have completed
+        # initialisation while we were waiting to acquire it.
         if _COMMON_PASSWORDS_CACHE is not None:
             return _COMMON_PASSWORDS_CACHE
+
         try:
             loaded = _load_common_passwords()
 
@@ -544,8 +594,18 @@ def get_common_passwords() -> frozenset[str]:
                     f"Offending entries: {_sorted_bad[:10]}{_suffix}"
                 )
 
-            # Overlap with keyboard patterns — informational only; double-penalty is
-            # already prevented by the skip logic in PasswordAnalyzer.
+            # Sanity check: a suspiciously small merged set means common-password
+            # detection coverage is severely degraded.
+            if len(loaded) < _MIN_EXPECTED_COMMON_PASSWORDS:
+                _logger.warning(
+                    "Common passwords set has only %d entries (expected at "
+                    "least %d). Common-password detection coverage may be "
+                    "severely degraded.",
+                    len(loaded), _MIN_EXPECTED_COMMON_PASSWORDS,
+                )
+
+            # Overlap with keyboard patterns — informational only; double-penalty
+            # is already prevented by the skip logic in PasswordAnalyzer.
             _overlap = frozenset(KEYBOARD_PATTERNS) & loaded
             if _overlap:
                 _logger.debug(
@@ -555,29 +615,11 @@ def get_common_passwords() -> frozenset[str]:
                 )
 
             if _logger.isEnabledFor(_logging.DEBUG):
-                _substring_overlaps: list[tuple[str, str]] = [
-                    (pattern, entry)
-                    for pattern in KEYBOARD_PATTERNS
-                    for entry in loaded
-                    if pattern in entry and pattern != entry
-                ]
-                if _substring_overlaps:
-                    _preview    = _substring_overlaps[:10]
-                    _extra      = len(_substring_overlaps) - len(_preview)
-                    _extra_note = f"\n  ...and {_extra} more" if _extra else ""
-                    _logger.debug(
-                        "KEYBOARD_PATTERNS substrings found inside COMMON_PASSWORDS entries "
-                        "(double penalty handled by skip logic):\n%s%s",
-                        "\n".join(
-                            f"  pattern '{p}' found inside common password '{e}'"
-                            for p, e in _preview
-                        ),
-                        _extra_note,
-                    )
+                _debug_log_pattern_overlaps(loaded)
 
             _COMMON_PASSWORDS_CACHE = loaded
 
-        except Exception as exc:
+        except (OSError, ValueError, UnicodeDecodeError, MemoryError) as exc:
             _logger.warning(
                 "Unexpected error while loading or validating the common passwords "
                 "list (%s: %s). Falling back to the built-in list (%d variant "
