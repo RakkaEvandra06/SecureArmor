@@ -3,7 +3,7 @@ from importlib.metadata import PackageNotFoundError, version as _metadata_versio
 
 from .analyzer import PasswordAnalyzer
 from .models import CriterionResult, PasswordAnalysis, SkipReason
-from .scoring import AnalysisSummary, criteria_summary, max_possible_score, score_bar
+from .scoring import AnalysisSummary, criteria_summary, effective_max_score, score_bar
 
 try:
     __version__: str = _metadata_version("securearmor")
@@ -18,6 +18,6 @@ __all__ = [
     "SkipReason",
     "AnalysisSummary",
     "criteria_summary",
-    "max_possible_score",
+    "effective_max_score",
     "score_bar",
 ]
