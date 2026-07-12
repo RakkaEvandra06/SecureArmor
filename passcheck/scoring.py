@@ -44,6 +44,7 @@ class AnalysisSummary(TypedDict):
     entropy_bits:        float
     passed_count:        int
     total_criteria:      int
+    weak_pattern_cap_applied: bool
     suggestions:         list[str]
     criteria:            list[CriterionSummary]
 
@@ -74,6 +75,7 @@ def criteria_summary(analysis: PasswordAnalysis) -> AnalysisSummary:
         entropy_bits=round(analysis.entropy_bits, 2),
         passed_count=analysis.passed_count,
         total_criteria=analysis.total_criteria,
+        weak_pattern_cap_applied=analysis.weak_pattern_cap_applied,
         suggestions=list(analysis.suggestions),
         criteria=[
             CriterionSummary(
