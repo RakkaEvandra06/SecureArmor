@@ -5,12 +5,20 @@ from enum import Enum
 
 from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 
+def compute_score_percent(score: int, effective_max_score: int) -> int:
+    """Return *score* as a percentage of *effective_max_score*, clamped to ``[0, 100]``."""
+    if effective_max_score <= 0:
+        return 0
+    return min(round(score / effective_max_score * 100), 100)
+
 class SkipReason(str, Enum):
     """Stable, versioned reason codes for skipped :class:`CriterionResult` entries."""
 
     COMMON_PASSWORD_DETECTED   = "common_password_detected"
     REPETITION_PENALTY_APPLIED = "repetition_penalty_applied"
     UNICODE_ONLY_PASSWORD      = "unicode_only_password"
+    TOO_SHORT_FOR_LOOKUP       = "too_short_for_lookup"
+    EMPTY_PASSWORD             = "empty_password"
 
 @dataclass(frozen=True)
 class CriterionResult:
@@ -128,6 +136,7 @@ class PasswordAnalysis:
     criteria:        tuple[CriterionResult, ...] = field(default=())
     entropy_bits:    float                        = 0.0
     suggestions:     tuple[str, ...]              = field(default=())
+    weak_pattern_cap_applied: bool                = False
 
     def __post_init__(self) -> None:
         if self.password_length < 0:
@@ -200,7 +209,4 @@ class PasswordAnalysis:
     @property
     def score_percent(self) -> int:
         """Score as a percentage of the effective maximum, in ``[0, 100]``."""
-        eff_max = self.effective_max_score   # call property; no cached field
-        if eff_max == 0:
-            return 0
-        return min(round(self.score / eff_max * 100), 100)
+        return compute_score_percent(self.score, self.effective_max_score)
