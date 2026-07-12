@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import codecs
+import logging as _logging
+import re
 import sys
 import unicodedata
 
@@ -36,28 +38,51 @@ _MASK_FULL_BELOW:        int = 6
 _MASK_SINGLE_EDGE_BELOW: int = 8
 
 try:
-    import grapheme as _grapheme  # type: ignore[import]
+    import grapheme as _grapheme
 
-    def _grapheme_split(s: str) -> list[str]:
+    def split_graphemes(s: str) -> list[str]:
         """Split *s* into user-perceived grapheme clusters (Unicode-aware)."""
         return list(_grapheme.graphemes(s))
 
 except ImportError:
-    def _grapheme_split(s: str) -> list[str]:  # type: ignore[misc]
+    _grapheme_fallback_warned = False
+
+    def split_graphemes(s: str) -> list[str]:
         """Fallback: split by Unicode code points."""
+        global _grapheme_fallback_warned
+        if not _grapheme_fallback_warned:
+            _logging.getLogger(__name__).warning(
+                "Optional 'grapheme' package not installed; falling back to "
+                "code-point splitting. Multi-codepoint Unicode characters "
+                "(emoji, combining marks) may be miscounted as a result. "
+                "For full correctness, install with: pip install securearmor[unicode]"
+            )
+            _grapheme_fallback_warned = True
         return list(s)
 
 def grapheme_len(s: str) -> int:
     """Return the number of user-perceived grapheme clusters in *s*."""
-    return len(_grapheme_split(s))
+    return len(split_graphemes(s))
 
 def grapheme_unique_count(s: str) -> int:
     """Return the number of *distinct* user-perceived grapheme clusters in *s*."""
-    return len(set(_grapheme_split(s)))
+    return len(set(split_graphemes(s)))
+
+# ---------------------------------------------------------------------------
+# Structural repetition detection
+# ---------------------------------------------------------------------------
+
+def repeated_block_period(seq: str | list[str]) -> int:
+    """Return the period of the shortest exact repeating block in *seq*."""
+    n = len(seq)
+    for p in range(1, n // 2 + 1):
+        if n % p == 0 and seq == seq[:p] * (n // p):
+            return p
+    return 0
 
 def masked_password(password: str) -> str:
     """Return a display-safe masked version of *password*."""
-    chars  = _grapheme_split(password)
+    chars  = split_graphemes(password)
     length = len(chars)
     if length < _MASK_FULL_BELOW:
         # Fully mask very short passwords — revealing any character would expose
@@ -90,14 +115,25 @@ _leet_source: dict[str, str] = {
     "2": "z",                              # cra2y    → crazy
 }
 
-_LEET_TABLE: dict[int, int] = str.maketrans(_leet_source)
+LEET_TABLE: dict[int, int] = str.maketrans(
+    "".join(_leet_source.keys()), "".join(_leet_source.values())
+)
 
 _PUNCTUATION_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
 _MIN_ASCII_RESIDUE_LEN: int = 4
 
+_EDGE_DECORATION_RE: re.Pattern[str] = re.compile(
+    rf"^[{re.escape(_PUNCTUATION_CHARS)}0-9]+|[{re.escape(_PUNCTUATION_CHARS)}0-9]+$"
+)
+
 # ---------------------------------------------------------------------------
 # Lookup normalisation
 # ---------------------------------------------------------------------------
+
+def ascii_residue_length(pw: str) -> int:
+    """Return the length of *pw* after NFKD+casefold ASCII-residue extraction."""
+    nfkd = unicodedata.normalize("NFKD", pw.casefold())
+    return len(nfkd.encode("ascii", errors="ignore").decode("ascii"))
 
 def normalise_for_lookup(pw: str) -> frozenset[str]:
     """Return a set of distinct normalised lookup keys for common-password detection."""
@@ -109,17 +145,21 @@ def normalise_for_lookup(pw: str) -> frozenset[str]:
 
     whitespace_stripped     = ascii_pw.strip()
     stripped                = whitespace_stripped.strip(_PUNCTUATION_CHARS)
-    leet_full               = ascii_pw.translate(_LEET_TABLE)
-    whitespace_leet         = whitespace_stripped.translate(_LEET_TABLE)
-    stripped_normalised     = stripped.translate(_LEET_TABLE)
+    edge_stripped           = _EDGE_DECORATION_RE.sub("", whitespace_stripped)
+    leet_full               = ascii_pw.translate(LEET_TABLE)
+    whitespace_leet         = whitespace_stripped.translate(LEET_TABLE)
+    stripped_normalised     = stripped.translate(LEET_TABLE)
+    edge_stripped_leet      = edge_stripped.translate(LEET_TABLE)
     reversed_leet           = leet_full[::-1]
 
     return frozenset(filter(None, {
         ascii_pw,
         whitespace_stripped,
         stripped,
+        edge_stripped,
         leet_full,
         whitespace_leet,
         stripped_normalised,
+        edge_stripped_leet,
         reversed_leet,
     }))
