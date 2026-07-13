@@ -9,7 +9,7 @@ import colorama
 from colorama import Fore, Style
 
 from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
-from .models import PasswordAnalysis
+from .models import PasswordAnalysis, compute_score_percent
 from .scoring import criteria_summary, score_bar
 from .utils import is_utf_terminal as _is_utf_terminal
 
@@ -156,10 +156,19 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
     score = analysis.score
     eff_max = analysis.effective_max_score
     denom   = str(eff_max)
-    bar_pct = round(score / eff_max * 100) if eff_max > 0 else 0
+    bar_pct = compute_score_percent(score, eff_max)
     bar     = score_bar(bar_pct, width=24, utf=_UTF_TERMINAL)
 
     print()
+    if analysis.weak_pattern_cap_applied:
+        print(
+            _coloured(
+                "  ⚠ Score capped: this password matches a known common/weak "
+                "pattern, so its score is capped regardless of other criteria "
+                "passed below.",
+                "red",
+            )
+        )
     print(
         f"  {_coloured(bar, color)}"
         f"  {_bold(_coloured(f'{score:>3}/{denom}', color))}"
