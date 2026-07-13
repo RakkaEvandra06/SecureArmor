@@ -52,8 +52,14 @@ SCORE_WEIGHTS: MappingProxyType[str, int] = MappingProxyType({
     "entropy":              8,
 })
 
-if not all(v >= 0 for v in SCORE_WEIGHTS.values()):
-    raise ValueError("All SCORE_WEIGHTS values must be non-negative.")
+if not all(v > 0 for v in SCORE_WEIGHTS.values()):
+    raise ValueError(
+        "All SCORE_WEIGHTS values must be strictly positive (CriterionResult "
+        "requires max_score > 0 for every criterion). To disable a criterion "
+        "entirely, remove its key from SCORE_WEIGHTS and delete the "
+        "corresponding _criterion_* method in analyzer.py, then rebalance "
+        "the remaining weights back to a sum of 100, do not set it to 0."
+    )
 
 _weights_total = sum(SCORE_WEIGHTS.values())
 if _weights_total != 100:
@@ -183,6 +189,18 @@ if STRENGTH_BANDS[-1][0] != 0:
 
 # Derive the set of valid colour keys directly from the bands definition.
 VALID_COLOUR_KEYS: frozenset[str] = frozenset(colour for _, _, colour in STRENGTH_BANDS)
+
+# ---------------------------------------------------------------------------
+# Known-weak-pattern score cap
+# ---------------------------------------------------------------------------
+
+MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN: int = 25
+
+if not (0 <= MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN <= 100):
+    raise ValueError(
+        "MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN must be in [0, 100], got "
+        f"{MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN!r}."
+    )
 
 # ---------------------------------------------------------------------------
 # Special characters
@@ -576,10 +594,8 @@ def get_common_passwords() -> frozenset[str]:
         return _COMMON_PASSWORDS_CACHE
 
     with _COMMON_PASSWORDS_LOCK:
-        # Re-check inside the lock: another thread may have completed
-        # initialisation while we were waiting to acquire it.
         if _COMMON_PASSWORDS_CACHE is not None:
-            return _COMMON_PASSWORDS_CACHE
+            return _COMMON_PASSWORDS_CACHE  # type: ignore[unreachable]
 
         try:
             loaded = _load_common_passwords()
