@@ -16,6 +16,7 @@ from .constants import (
     LENGTH_GOOD,
     LENGTH_MAXIMUM,
     LENGTH_MINIMUM,
+    MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN,
     NON_ASCII_POOL_SIZE,
     REPEATED_CHAR_RATIO,
     SCORE_WEIGHTS,
@@ -24,14 +25,14 @@ from .constants import (
     STRENGTH_BANDS,
     get_common_passwords,
 )
-from .models import CriterionResult, PasswordAnalysis, SkipReason
+from .models import CriterionResult, PasswordAnalysis, SkipReason, compute_score_percent
 from .utils import (
-    _grapheme_split,
-    _LEET_TABLE,
-    grapheme_len,
-    grapheme_unique_count,
+    LEET_TABLE,
+    ascii_residue_length,
     masked_password,
     normalise_for_lookup,
+    repeated_block_period,
+    split_graphemes,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,11 +40,12 @@ from .utils import (
 # ---------------------------------------------------------------------------
 
 _EXPECTED_CHAR_CLASS_COUNT: int = 5
-assert CHAR_CLASS_COUNT == _EXPECTED_CHAR_CLASS_COUNT, (
-    f"constants.CHAR_CLASS_COUNT ({CHAR_CLASS_COUNT}) no longer matches the "
-    f"{_EXPECTED_CHAR_CLASS_COUNT} character-class checks implemented in "
-    "PasswordAnalyzer._criterion_char_variety(). Update one or the other."
-)
+if CHAR_CLASS_COUNT != _EXPECTED_CHAR_CLASS_COUNT:
+    raise AssertionError(
+        f"constants.CHAR_CLASS_COUNT ({CHAR_CLASS_COUNT}) no longer matches the "
+        f"{_EXPECTED_CHAR_CLASS_COUNT} character-class checks implemented in "
+        "PasswordAnalyzer._criterion_char_variety(). Update one or the other."
+    )
 
 class PasswordAnalyzer:
     """Evaluate password strength across the weighted criteria in SCORE_WEIGHTS."""
@@ -56,7 +58,8 @@ class PasswordAnalyzer:
         """Run every criterion against *password* and return the aggregated result."""
         password = unicodedata.normalize("NFC", password)
 
-        length = grapheme_len(password)
+        graphemes = split_graphemes(password)
+        length = len(graphemes)
         if length > LENGTH_MAXIMUM:
             raise ValueError(
                 f"Password exceeds the maximum analysable length of "
@@ -67,7 +70,16 @@ class PasswordAnalyzer:
         lookup_variants = normalise_for_lookup(password)
         can_lookup = bool(lookup_variants)
         is_common  = can_lookup and bool(lookup_variants & get_common_passwords())
-        entropy = self._compute_entropy(password, length)
+        # Distinguishes "too short to look up" (e.g. 'cat') from "genuinely
+        # has no ASCII-equivalent form" (e.g. an all-CJK/emoji password) so
+        # the skip_reason reported to callers is accurate in both cases.
+        has_ascii_residue = ascii_residue_length(password) > 0
+        entropy = self._compute_entropy(password, graphemes, length)
+
+        keyboard_result = self._criterion_no_keyboard_pattern(
+            password, is_common=is_common, can_lookup=can_lookup, length=length,
+            has_ascii_residue=has_ascii_residue,
+        )
 
         criteria: tuple[CriterionResult, ...] = (
             self._criterion_length_minimum(length),
@@ -78,18 +90,29 @@ class PasswordAnalyzer:
             self._criterion_has_digit(password),
             self._criterion_has_special(password),
             self._criterion_char_variety(password),
-            self._criterion_char_uniqueness(password, length),
-            self._criterion_no_common_password(is_common=is_common, can_lookup=can_lookup),
-            self._criterion_no_keyboard_pattern(
-                password, is_common=is_common, can_lookup=can_lookup
+            self._criterion_char_uniqueness(graphemes, length),
+            self._criterion_no_common_password(
+                is_common=is_common, can_lookup=can_lookup, length=length,
+                has_ascii_residue=has_ascii_residue,
             ),
-            self._criterion_no_repeated_chars(password, length, is_common=is_common),
+            keyboard_result,
+            self._criterion_no_repeated_chars(graphemes, length, is_common=is_common),
             self._criterion_entropy(entropy),
         )
 
         eff_max   = sum(c.max_score for c in criteria if not c.skipped)
         raw_score = sum(c.score for c in criteria if not c.skipped)
         score     = raw_score
+        keyboard_hit = (not keyboard_result.skipped) and (not keyboard_result.passed)
+        weak_pattern_detected = is_common or keyboard_hit
+
+        cap_applied = False
+        if weak_pattern_detected:
+            capped = min(score, round(eff_max * MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN / 100))
+            if capped < score:
+                cap_applied = True
+            score = capped
+
         label, colour = self._strength_label_and_colour(score, eff_max)
 
         return PasswordAnalysis(
@@ -100,6 +123,7 @@ class PasswordAnalyzer:
             strength_color=colour,
             criteria=criteria,
             entropy_bits=entropy,
+            weak_pattern_cap_applied=cap_applied,
             suggestions=tuple(
                 c.suggestion
                 for c in criteria
@@ -210,7 +234,7 @@ class PasswordAnalyzer:
             any(c.islower() for c in pw),
             any(c.isascii() and c.isdigit() for c in pw),
             any(c in SPECIAL_CHARS_SET for c in pw),
-            any(not c.isascii() for c in pw),  # 5th class: non-ASCII / Unicode
+            any(not c.isascii() and not c.isupper() and not c.islower() for c in pw),
         ]
 
         classes = sum(classes_present)
@@ -232,9 +256,9 @@ class PasswordAnalyzer:
             ),
         )
 
-    def _criterion_char_uniqueness(self, pw: str, length: int) -> CriterionResult:
+    def _criterion_char_uniqueness(self, graphemes: list[str], length: int) -> CriterionResult:
         weight = SCORE_WEIGHTS["char_uniqueness"]
-        unique_count = grapheme_unique_count(pw)
+        unique_count = len(set(graphemes))
         unique_ratio = unique_count / max(length, 1)
         passed = unique_ratio >= CHAR_UNIQUENESS_MIN_RATIO
         return CriterionResult(
@@ -251,11 +275,32 @@ class PasswordAnalyzer:
     # ------------------------------------------------------------------
 
     def _criterion_no_common_password(
-        self, *, is_common: bool, can_lookup: bool
+        self, *, is_common: bool, can_lookup: bool, length: int,
+        has_ascii_residue: bool,
     ) -> CriterionResult:
         weight = SCORE_WEIGHTS["no_common_password"]
 
         if not can_lookup:
+            if length == 0:
+                return CriterionResult(
+                    name="Not a Common Password",
+                    passed=False,
+                    score=0,
+                    max_score=weight,
+                    detail="skipped, password is empty",
+                    skipped=True,
+                    skip_reason=SkipReason.EMPTY_PASSWORD,
+                )
+            if has_ascii_residue:
+                return CriterionResult(
+                    name="Not a Common Password",
+                    passed=False,
+                    score=0,
+                    max_score=weight,
+                    detail="skipped, password is too short for common-password lookup",
+                    skipped=True,
+                    skip_reason=SkipReason.TOO_SHORT_FOR_LOOKUP,
+                )
             return CriterionResult(
                 name="Not a Common Password",
                 passed=False,
@@ -277,7 +322,8 @@ class PasswordAnalyzer:
         )
 
     def _criterion_no_keyboard_pattern(
-        self, pw: str, *, is_common: bool, can_lookup: bool
+        self, pw: str, *, is_common: bool, can_lookup: bool, length: int,
+        has_ascii_residue: bool,
     ) -> CriterionResult:
         weight = SCORE_WEIGHTS["no_keyboard_pattern"]
 
@@ -293,6 +339,26 @@ class PasswordAnalyzer:
             )
 
         if not can_lookup:
+            if length == 0:
+                return CriterionResult(
+                    name="No Keyboard Pattern",
+                    passed=False,
+                    score=0,
+                    max_score=weight,
+                    detail="skipped, password is empty",
+                    skipped=True,
+                    skip_reason=SkipReason.EMPTY_PASSWORD,
+                )
+            if has_ascii_residue:
+                return CriterionResult(
+                    name="No Keyboard Pattern",
+                    passed=False,
+                    score=0,
+                    max_score=weight,
+                    detail="skipped, password is too short for keyboard-pattern lookup",
+                    skipped=True,
+                    skip_reason=SkipReason.TOO_SHORT_FOR_LOOKUP,
+                )
             return CriterionResult(
                 name="No Keyboard Pattern",
                 passed=False,
@@ -304,7 +370,7 @@ class PasswordAnalyzer:
             )
 
         pw_lower     = pw.lower()
-        pw_normalised = pw_lower.translate(_LEET_TABLE)
+        pw_normalised = pw_lower.translate(LEET_TABLE)
         hit = next(
             (
                 pattern
@@ -324,7 +390,7 @@ class PasswordAnalyzer:
         )
 
     def _criterion_no_repeated_chars(
-        self, pw: str, length: int, *, is_common: bool
+        self, graphemes: list[str], length: int, *, is_common: bool
     ) -> CriterionResult:
         weight = SCORE_WEIGHTS["no_repeated_chars"]
 
@@ -344,11 +410,11 @@ class PasswordAnalyzer:
                 passed=False,
                 score=0,
                 max_score=weight,
-                detail="no characters present",
-                suggestion="Enter a non-empty password.",
+                detail="skipped, password is empty",
+                skipped=True,
+                skip_reason=SkipReason.EMPTY_PASSWORD,
             )
 
-        graphemes = _grapheme_split(pw)
         counter   = Counter(graphemes)
         max_freq  = counter.most_common(1)[0][1] if counter else 0
         ratio     = max_freq / max(length, 1)   # length == len(graphemes)
@@ -384,12 +450,11 @@ class PasswordAnalyzer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _compute_entropy(pw: str, length: int) -> float:
+    def _compute_entropy(pw: str, graphemes: list[str], length: int) -> float:
         """Return a blended Shannon / character-pool entropy estimate, in bits."""
         if length == 0:
             return 0.0
 
-        graphemes        = _grapheme_split(pw)
         counts           = Counter(graphemes)
         total            = length                  # == len(graphemes)
         shannon_per_char = -sum(
@@ -409,15 +474,25 @@ class PasswordAnalyzer:
             pool_size += NON_ASCII_POOL_SIZE
         pool_size = max(pool_size, 1)
 
-        shannon_total = shannon_per_char * length
-        pool_total    = math.log2(pool_size) * length
+        period = repeated_block_period(graphemes)
+        effective_length: float = length
+        if period >= 1:
+            repetitions = length / period
+            effective_length = period + math.log2(repetitions)
+
+        max_freq = max(counts.values())
+        freq_effective_length = length * (1 - max_freq / length) + 1
+        effective_length = min(effective_length, freq_effective_length, length)
+
+        shannon_total = shannon_per_char * effective_length
+        pool_total    = math.log2(pool_size) * effective_length
 
         return SHANNON_WEIGHT * shannon_total + (1 - SHANNON_WEIGHT) * pool_total
 
     @staticmethod
     def _strength_label_and_colour(score: int, eff_max: int) -> tuple[str, str]:
         """Map *score* (as a percentage of *eff_max*) to a strength label and colour key."""
-        pct = round(score / eff_max * 100) if eff_max > 0 else 0
+        pct = compute_score_percent(score, eff_max)
         for threshold, label, colour in STRENGTH_BANDS:
             if pct >= threshold:
                 return label, colour
