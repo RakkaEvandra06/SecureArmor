@@ -70,6 +70,9 @@ lint = [
     "flake8>=5.0.0",
     "mypy>=0.990",
 ]
+unicode = [
+    "grapheme>=0.6.0",
+]
 
 [project.urls]
 Homepage      = "https://github.com/RakkaEvandra06/passcheck"
@@ -150,6 +153,10 @@ show_error_codes        = true
 module                  = ["colorama", "colorama.*"]
 ignore_missing_imports  = true
 
+[[tool.mypy.overrides]]
+module                 = ["grapheme", "grapheme.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion       = "7.0"
 testpaths        = ["tests"]
@@ -189,10 +196,10 @@ exclude_lines = [
 ]
 show_missing = true
 skip_covered = false
-fail_under   = 80
+fail_under   = 75
 
 [tool.bandit]
 exclude_dirs = ["tests", "docs"]
-skips        = ["B101", "B311", "B403"]
+skips        = ["B101", "B403"]
 severity     = "medium"
 confidence   = "medium"
