@@ -37,12 +37,12 @@
 
 SecureArmor was built around the idea that password feedback should be **specific, honest, and actionable** not just a colour-coded "weak / strong" bar. Under the hood it combines multiple heuristics into a single 0–100 score, with each criterion carrying independent weight:
 
-- **Multi-dimensional scoring** 13 criteria covering length, character class presence, variety, uniqueness, entropy, common-password detection, and keyboard-pattern recognition.
-- **Entropy estimation** a blended pool-size / Shannon model that quantifies true unpredictability, not just rule compliance.
-- **Leet-speak normalisation** common substitutions (`@→a`, `0→o`, `$→s`, …) are decoded before the common-password check, so `P@$$w0rd` is flagged just like `Password`.
-- **Safe by default** the raw password is never stored or logged; only a masked form (`M*******!`) is kept in the result object.
-- **Machine-readable output** every command supports `--json` for NDJSON-compatible output suitable for scripting, CI pipelines, and downstream tooling.
-- **Batch support** pipe a newline-delimited list of passwords to `passcheck batch` for bulk analysis.
+- **Multi-dimensional scoring** — 13 criteria covering length, character class presence, variety, uniqueness, entropy, common-password detection, and keyboard-pattern recognition.
+- **Entropy estimation** — a blended pool-size / Shannon model that quantifies true unpredictability, not just rule compliance.
+- **Leet-speak normalisation** — common substitutions (`@→a`, `0→o`, `$→s`, …) are decoded before the common-password check, so `P@$$w0rd` is flagged just like `Password`.
+- **Safe by default** — the raw password is never stored or logged; only a masked form (`M*******!`) is kept in the result object.
+- **Machine-readable output** — every command supports `--json` for NDJSON-compatible output suitable for scripting, CI pipelines, and downstream tooling.
+- **Batch support** — pipe a newline-delimited list of passwords to `passcheck batch` for bulk analysis.
 
 ---
 
@@ -128,15 +128,43 @@ Sample JSON output:
 
 ```json
 {
-  "score": 72,
-  "strength": "Strong",
-  "entropy_bits": 54.3,
-  "passed": 9,
-  "total": 12,
-  "suggestions": ["Add special characters such as: ! @ # $ % ^ & *"],
+  "password_masked": "G*******2",
+  "password_length": 9,
+  "score": 67,
+  "effective_max_score": 100,
+  "score_percent": 67,
+  "strength_label": "Strong",
+  "strength_color": "green",
+  "entropy_bits": 38.56,
+  "passed_count": 8,
+  "total_criteria": 13,
+  "suggestions": [
+    "Aim for 12+ characters for a sizeable length bonus.",
+    "Consider 20+ characters for maximum length credit.",
+    "Add a special character (e.g. ! @ # $ % ^ & *).",
+    "Increase length and character variety to raise entropy."
+  ],
   "criteria": [
-    { "name": "Minimum length", "passed": true,  "skipped": false, "score": 10, "max_score": 10, "detail": "Length is 11 characters (minimum 8)" },
-    { "name": "Not a common password", "passed": true, "skipped": false, "score": 10, "max_score": 10, "detail": "Not found in common password lists" }
+    {
+      "name": "Minimum Length",
+      "passed": true,
+      "skipped": false,
+      "score": 9,
+      "max_score": 9,
+      "detail": "9 chars (minimum 8)",
+      "suggestion": "",
+      "skip_reason": null
+    },
+    {
+      "name": "Not a Common Password",
+      "passed": true,
+      "skipped": false,
+      "score": 9,
+      "max_score": 9,
+      "detail": "not found in common password list",
+      "suggestion": "",
+      "skip_reason": null
+    }
   ]
 }
 ```
@@ -207,7 +235,7 @@ Contributions are welcome! Here's how to get started:
 5. **Lint** your code: `black . && isort . && flake8 . && mypy passcheck/`.
 6. **Open a Pull Request** with a clear description of what changed and why.
 
-Please keep pull request focused on a single concern. For larger changes, open an issue first to discuss the approach.
+Please keep pull requests focused on a single concern. For larger changes, open an issue first to discuss the approach.
 
 ---
 
