@@ -58,7 +58,7 @@ def _set_analyzer(analyzer: PasswordAnalyzer) -> None:
 class _ExitCode(IntEnum):
     OK          = 0
     ERROR       = 1
-    PARTIAL     = 2
+    PARTIAL     = 3
     INTERRUPTED = 130  # POSIX convention: 128 + SIGINT(2)
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ _INSECURE_FLAG_WARNING: str = (
     "WARNING: The --password flag is inherently insecure.\n"
     "  • Your shell records the value in its history file.\n"
     "  • Every major OS exposes process command-line arguments before any\n"
-    "    Python code runs — they are visible to other users and monitoring\n"
+    "    Python code runs, they are visible to other users and monitoring\n"
     "    tools (Task Manager, Activity Monitor, ps, /proc/<pid>/cmdline …).\n"
     "Use --password-env <VAR> for safer scripting, or run 'passcheck' with\n"
     "no flags for the secure interactive prompt.\n"
@@ -106,13 +106,15 @@ def _insecure_password_callback(
     _warn_insecure_flag()
 
     if os.environ.get(_INSECURE_FLAG_ENV_GATE) != "1":
-        raise click.UsageError(
-            "The --password flag is disabled by default for security reasons.\n"
+        click.echo(
+            "Error: The --password flag is disabled by default for security reasons.\n"
             "Use --password-env <VAR> for safer scripting, or\n"
             "run 'passcheck' with no flags for the secure interactive prompt.\n"
-            f"To acknowledge the risk and enable this flag, set:\n"
-            f"      {_INSECURE_FLAG_ENV_GATE}=1"
+            "To acknowledge the risk and enable this flag, set:\n"
+            f"      {_INSECURE_FLAG_ENV_GATE}=1",
+            err=True,
         )
+        raise SystemExit(_ExitCode.ERROR)
 
     return value
 
@@ -198,8 +200,11 @@ def cli(ctx: click.Context) -> None:
     help=(
         "Name of an environment variable that holds the password to analyse. "
         "Safer than --password: environment variables are not visible in the OS "
-        "process list. "
-        "Example: PASSCHECK_PW=secret passcheck check --password-env PASSCHECK_PW"
+        "process list. To also avoid shell-history exposure, set the variable on "
+        "its own line first (an inline 'VAR=secret cmd' is still recorded in most "
+        "shells' history just like --password is), e.g.:\n"
+        "  export PASSCHECK_PW=secret\n"
+        "  passcheck check --password-env PASSCHECK_PW"
     ),
 )
 @click.option(
@@ -270,6 +275,13 @@ def check(
 
     # ── --password path ──────────────────────────────────────────────────────
     if password is not None:
+        if password == "":
+            click.echo(
+                "Error: --password was given an empty value. "
+                "Please provide a non-empty password.",
+                err=True,
+            )
+            raise SystemExit(_ExitCode.ERROR)
         try:
             password = _nfc_and_check_length(password)
         except PasswordTooLongError as exc:
@@ -366,15 +378,17 @@ def _warn_invalid_password(
     line_num: int = 0,
 ) -> None:
     """Emit a per-line warning for a password that was skipped in batch mode."""
-    glen = _grapheme_len(pw)
+    glen = _grapheme_len(pw) if pw else None
     if output_json:
-        _emit_json({
+        payload: dict[str, object] = {
             "event":  "skipped_invalid",
             "line":   line_num,
-            "length": glen,
-            "limit":  LENGTH_MAXIMUM,
             "detail": reason,
-        })
+        }
+        if glen is not None:
+            payload["length"] = glen
+            payload["limit"]  = LENGTH_MAXIMUM
+        _emit_json(payload)
     else:
         loc = f"line {line_num}: " if line_num else ""
         click.echo(f"Warning: {loc}{reason}", err=True)
@@ -383,13 +397,22 @@ def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
     """Stream analysis results for all passwords arriving on stdin."""
     found_any     = False
     need_sep      = False
-    line_num      = 0
     failure_count = 0
 
     try:
-        for pw in _stdin_passwords(output_json=output_json):
-            line_num  += 1
-            found_any  = True
+        for line_num, pw, skip_reason in _stdin_passwords(output_json=output_json):
+            found_any = True
+
+            if pw is None:
+                # The line never produced a candidate password (oversized or
+                # undecodable) — still counts as a failure for exit-code
+                # purposes, and is reported against its real file line number.
+                _warn_invalid_password(
+                    "", output_json=output_json, reason=skip_reason, line_num=line_num,
+                )
+                failure_count += 1
+                continue
+
             if not output_json and need_sep:
                 print_separator()
             need_sep = True
@@ -431,26 +454,44 @@ def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _stdin_passwords(*, output_json: bool = False) -> Iterator[str]:
-    """Yield non-blank passwords from stdin, one per line."""
-    for raw_line in sys.stdin.buffer:
+_MAX_LINE_BYTES: int = 8192
+
+def _stdin_passwords(
+    *, output_json: bool = False,
+) -> Iterator[tuple[int, str | None, str | None]]:
+    """Yield ``(line_num, password, skip_reason)`` tuples from stdin, one per raw line."""
+    buf = sys.stdin.buffer
+    line_num = 0
+    while True:
+        raw_line = buf.readline(_MAX_LINE_BYTES + 1)
+        if not raw_line:
+            return  # EOF
+        line_num += 1
+
+        if len(raw_line) > _MAX_LINE_BYTES and not raw_line.endswith(b"\n"):
+            # Oversized: drain and discard the remainder of this line so its
+            # tail isn't mistaken for a separate password on the next read.
+            while True:
+                rest = buf.readline(_MAX_LINE_BYTES)
+                if not rest or rest.endswith(b"\n"):
+                    break
+            yield (
+                line_num,
+                None,
+                f"line exceeded the {_MAX_LINE_BYTES}-byte read limit and was skipped",
+            )
+            continue
+
         try:
             line = raw_line.decode("utf-8")
         except UnicodeDecodeError:
-            if output_json:
-                _emit_json({
-                    "event":  "decode_error",
-                    "detail": "A line could not be decoded as UTF-8 and was skipped.",
-                })
-            else:
-                click.echo(
-                    "Warning: skipped a line that could not be decoded as UTF-8.",
-                    err=True,
-                )
+            yield (line_num, None, "line could not be decoded as UTF-8 and was skipped")
             continue
+
         pw = line.rstrip("\r\n")
         if pw:
-            yield pw
+            yield (line_num, pw, None)
+        # blank lines: fall through silently; line_num has already advanced.
 
 def _analyze(password: str) -> PasswordAnalysis:
     """Run the analyser and return the result; propagate ValueError to the caller."""
