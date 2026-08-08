@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/animated-passfortress-v3.svg" width="100%" alt="PassFortress Banner"/>
+  <img src="assets/animated-passfortress-v4.svg" width="100%" alt="PassFortress Banner"/>
 </p>
 
 <div align="center">
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-3.0.0-informational)](https://github.com/RakkaEvandra06/passcheck/releases)
+[![Version](https://img.shields.io/badge/version-4.0.0-informational)](https://github.com/RakkaEvandra06/passcheck/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.txt)
 [![Security](https://img.shields.io/badge/security-focused-critical?logo=shield)](https://github.com/RakkaEvandra06/passcheck)
 [![Status](https://img.shields.io/badge/status-stable-brightgreen)](https://github.com/RakkaEvandra06/passcheck)
@@ -37,12 +37,12 @@
 
 SecureArmor was built around the idea that password feedback should be **specific, honest, and actionable** not just a colour-coded "weak / strong" bar. Under the hood it combines multiple heuristics into a single 0–100 score, with each criterion carrying independent weight:
 
-- **Multi-dimensional scoring** — 13 criteria covering length, character class presence, variety, uniqueness, entropy, common-password detection, and keyboard-pattern recognition.
-- **Entropy estimation** — a blended pool-size / Shannon model that quantifies true unpredictability, not just rule compliance.
-- **Leet-speak normalisation** — common substitutions (`@→a`, `0→o`, `$→s`, …) are decoded before the common-password check, so `P@$$w0rd` is flagged just like `Password`.
-- **Safe by default** — the raw password is never stored or logged; only a masked form (`M*******!`) is kept in the result object.
-- **Machine-readable output** — every command supports `--json` for NDJSON-compatible output suitable for scripting, CI pipelines, and downstream tooling.
-- **Batch support** — pipe a newline-delimited list of passwords to `passcheck batch` for bulk analysis.
+- **Multi-dimensional scoring** 13 criteria covering length, character class presence, variety, uniqueness, entropy, common-password detection, and keyboard-pattern recognition.
+- **Entropy estimation** a blended pool-size / Shannon model that quantifies true unpredictability, not just rule compliance.
+- **Leet-speak normalisation** common substitutions (`@→a`, `0→o`, `$→s`, …) are decoded before the common-password check, so `P@$$w0rd` is flagged just like `Password`.
+- **Safe by default** the raw password is never stored or logged; only a masked form (`M*******!`) is kept in the result object.
+- **Machine-readable output** every command supports `--json` for NDJSON-compatible output suitable for scripting, CI pipelines, and downstream tooling.
+- **Batch support** pipe a newline-delimited list of passwords to `passcheck batch` for bulk analysis.
 
 ---
 
@@ -50,21 +50,52 @@ SecureArmor was built around the idea that password feedback should be **specifi
 
 ```bash
 SecureArmor/
-├── assets/                # Banner images and static assets
+├── assets/                       # Banner images and static assets
 ├── passcheck/
-│   ├── __init__.py        # Public API surface   
-│   ├── analyzer.py        # Core PasswordAnalyzer — all 13 criterion checks
-│   ├── cli.py             # Click-based CLI (check / batch sub-commands)
-│   ├── constants.py       # Score weights, thresholds, pattern lists
-│   ├── display.py         # Coloured terminal rendering (human-readable)
-│   ├── main.py            # python -m passcheck entry point
-│   ├── models.py          # Immutable dataclasses: CriterionResult, PasswordAnalysis
-│   ├── scoring.py         # score_bar(), criteria_summary(), AnalysisSummary
-│   └── utils.py           # is_utf_terminal(), masked_password()
+│   ├── __init__.py                # Public API surface
+│   ├── __main__.py                 # `python -m passcheck` entry point
+│   ├── main.py                      # Backward-compat shim for __main__.py
+│   ├── models.py                     # Immutable dataclasses: CriterionResult, PasswordAnalysis
+│   ├── scoring.py                     # score_bar(), criteria_summary(), AnalysisSummary
+│   ├── display.py                      # Coloured terminal rendering (human-readable)
+│   ├── utils.py                         # is_utf_terminal(), masked_password(), leet-table, etc.
+│   │
+│   ├── analyzer/                        # Core scoring engine (was analyzer.py, 498 lines)
+│   │   ├── __init__.py                    # re-exports PasswordAnalyzer
+│   │   ├── core.py                         # PasswordAnalyzer.analyze() — thin orchestrator
+│   │   ├── length.py                        # minimum / good / excellent length criteria
+│   │   ├── character.py                      # char-class presence + variety + uniqueness
+│   │   ├── patterns.py                        # common-password / keyboard-walk / repetition
+│   │   ├── entropy.py                          # entropy criterion + the entropy estimator
+│   │   └── strength.py                          # score -> (label, colour) mapping
+│   │
+│   ├── cli/                              # Click-based CLI (was cli.py, 565 lines)
+│   │   ├── __init__.py                     # registers commands + re-exports public API
+│   │   ├── app.py                           # root Click group + main() entry point
+│   │   ├── exit_codes.py                     # ExitCode enum
+│   │   ├── errors.py                          # AnalysisError, PasswordTooLongError
+│   │   ├── security.py                         # the --password insecure-flag gate
+│   │   ├── analyzer_singleton.py                # shared PasswordAnalyzer instance
+│   │   ├── helpers.py                            # JSON output, NFC/length check, run-analysis
+│   │   ├── check_command.py                       # `passcheck check`
+│   │   ├── batch_command.py                        # `passcheck batch`
+│   │   └── interactive.py                           # the interactive prompt loop
+│   │
+│   ├── constants/                        # Tunables + data (was constants.py, 650 lines)
+│   │   ├── __init__.py                     # re-exports the full original surface
+│   │   ├── weights.py                       # SCORE_WEIGHTS
+│   │   ├── thresholds.py                     # length/entropy/composition thresholds, strength bands
+│   │   ├── special_chars.py                   # what counts as a "special" character
+│   │   ├── keyboard_patterns.py                # keyboard-walk pattern data
+│   │   ├── common_passwords_data.py             # built-in fallback word list (pure data)
+│   │   └── common_passwords_loader.py            # file loading / caching / validation logic
+│   │
+│   └── data/
+│       └── common_passwords.txt           # optional SecLists-style wordlist (primary source)
 ├── tests/
-│   └── test_analyzer.py   # Test suite (unittest / pytest compatible)
+│   └── test_analyzer.py           # Test suite (unittest / pytest compatible)
 ├── LICENSE.txt
-├── pyproject.toml         # Build metadata, tool configuration
+├── pyproject.toml                 # Build metadata, tool configuration
 └── README.md
 ```
 
@@ -77,7 +108,7 @@ SecureArmor/
 ```bash
 # 1. Clone the repository
 git clone https://github.com/RakkaEvandra06/SecureArmor.git
-cd SecureArmor
+cd securearmor
 
 # 2. Install runtime dependencies
 pip install click colorama
@@ -174,13 +205,13 @@ Sample JSON output:
 ```bash
 cat passwords.txt | passcheck batch
 cat passwords.txt | passcheck batch --json
-echo "hunter2"   | passcheck batch
+echo "hunter2"    | passcheck batch
 ```
 
 ### Help
 
 ```bash
-passcheck --help
+passcheck       --help
 passcheck check --help
 passcheck batch --help
 ```
@@ -230,7 +261,7 @@ Contributions are welcome! Here's how to get started:
 
 1. **Fork** the repository and create your branch from `main`.
 2. **Install** dev dependencies: `pip install -e ".[dev]"`.
-3. **Make your changes** — add or update tests to cover new behaviour.
+3. **Make your changes** add or update tests to cover new behaviour.
 4. **Run the full suite** and confirm coverage stays ≥ 80 %: `pytest tests/ -v`.
 5. **Lint** your code: `black . && isort . && flake8 . && mypy passcheck/`.
 6. **Open a Pull Request** with a clear description of what changed and why.
