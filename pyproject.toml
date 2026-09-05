@@ -57,6 +57,7 @@ dev = [
     "isort>=5.10.0",
     "flake8>=5.0.0",
     "mypy>=0.990",
+    "types-colorama>=0.4.15",
     "build>=0.10.0",
     "twine>=4.0.0",
 ]
@@ -69,6 +70,7 @@ lint = [
     "isort>=5.10.0",
     "flake8>=5.0.0",
     "mypy>=0.990",
+    "types-colorama>=0.4.15",
 ]
 unicode = [
     "grapheme>=0.6.0",
@@ -203,3 +205,26 @@ exclude_dirs = ["tests", "docs"]
 skips        = ["B101", "B403"]
 severity     = "medium"
 confidence   = "medium"
+
+# ── Pyright / Pylance (VS Code) ───────────────────────────────────────────────
+
+[tool.pyright]
+include = ["passcheck", "tests"]
+exclude = [
+    "**/__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".venv",
+    "venv",
+    ".mypy_cache",
+    ".pytest_cache",
+]
+venvPath                  = "."
+venv                      = ".venv"
+pythonVersion             = "3.10"
+typeCheckingMode          = "basic"
+reportMissingModuleSource = "none"
+reportUnknownMemberType   = "none"
+reportUnusedImport        = "warning"
+reportPrivateUsage        = "warning"
