@@ -1,10 +1,4 @@
-"""Numeric thresholds, strength bands, and the weak-pattern score cap.
-
-Grouped together because they share one trait: every value here is a
-tunable knob compared against a number computed for the password
-(length, entropy, ratios), as opposed to pattern/word *data* 
-(see keyboard_patterns.py and common_passwords_data.py).
-"""
+"""Numeric thresholds, strength bands, and the weak-pattern score cap."""
 from __future__ import annotations
 
 __all__ = [
@@ -31,7 +25,7 @@ __all__ = [
 LENGTH_MINIMUM:   int = 8
 LENGTH_GOOD:      int = 12
 LENGTH_EXCELLENT: int = 20
-LENGTH_MAXIMUM:   int = 128
+LENGTH_MAXIMUM:   int = 256   # SA-D02: raised from 128; supports long passphrases
 
 if not (LENGTH_MINIMUM < LENGTH_GOOD < LENGTH_EXCELLENT < LENGTH_MAXIMUM):
     raise ValueError(
@@ -51,7 +45,7 @@ SHANNON_WEIGHT: float = 0.6   # blend factor: 40 % pool, 60 % Shannon
 if not (0.0 < SHANNON_WEIGHT < 1.0):
     raise ValueError(f"SHANNON_WEIGHT must be in (0, 1), got {SHANNON_WEIGHT!r}.")
 
-NON_ASCII_POOL_SIZE: int = 32_768
+NON_ASCII_POOL_SIZE: int = 32_768   # deprecated — see SA-H02 above
 
 # ---------------------------------------------------------------------------
 # Repeated-character threshold
