@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import unicodedata
-
 import click
 
 from ..constants import LENGTH_MAXIMUM
@@ -45,14 +44,14 @@ def analyze(password: str) -> PasswordAnalysis:
     """Run the analyser and return the result; propagate ValueError to the caller."""
     return get_analyzer().analyze(password)
 
-def run_analysis(password: str, *, output_json: bool) -> None:
+def run_analysis(password: str, *, output_json: bool, redact: bool = False) -> None:
     """Analyse *password* and dispatch to the appropriate renderer."""
     try:
         analysis = analyze(password)
     except ValueError as exc:
         raise AnalysisError(str(exc)) from exc
     if output_json:
-        print_analysis_json(analysis)
+        print_analysis_json(analysis, redact=redact)
     else:
-        print_analysis(analysis)
+        print_analysis(analysis, redact=redact)
         print()  # trailing blank line is owned here, not inside print_analysis
