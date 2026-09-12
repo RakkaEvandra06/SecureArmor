@@ -1,14 +1,11 @@
-"""Loading, caching, and validating the common-password list.
-
-Pure logic, no inline data — see common_passwords_data.py for the
-built-in fallback literal and data/common_passwords.txt for the primary
-source.
-"""
+"""Loading, caching, and validating the common-password list."""
 from __future__ import annotations
 
 import logging  as _logging
+import os       as _os
 import pathlib  as _pathlib
 import random   as _random
+import sys      as _sys
 import threading as _threading
 
 from ..utils import normalise_for_lookup as _normalise_for_lookup
@@ -31,14 +28,43 @@ _BUILTIN_COMMON_PASSWORDS: frozenset[str] = _expand_builtin_passwords(
 )
 
 _MAX_COMMON_PASSWORDS_FILE_BYTES: int = 50 * 1024 * 1024  # 50 MB
-_MIN_EXPECTED_COMMON_PASSWORDS: int = 100
+_MIN_EXPECTED_COMMON_PASSWORDS: int = 5_000
+
+# ---------------------------------------------------------------------------
+# SA-M01: visible stderr warning for missing wordlist
+# ---------------------------------------------------------------------------
+
+def _warn_missing_wordlist(data_path: _pathlib.Path) -> None:
+    """Write a visible, actionable notice to stderr when the word list is absent."""
+    if _os.environ.get("PASSCHECK_SUPPRESS_WORDLIST_WARNING") == "1":
+        return
+
+    lines = [
+        "",
+        "[passcheck] WARNING: The common-password word list was not found:",
+        f"  {data_path}",
+        f"  Falling back to the built-in list ({len(_BUILTIN_COMMON_PASSWORDS)} entries).",
+        "  Common-password detection coverage is SEVERELY LIMITED.",
+        "  An attacker using a dictionary of 10,000 common passwords would have",
+        "  roughly 14× more coverage than this tool currently provides.",
+        "",
+        "  To restore full coverage, place a word list at the path above.",
+        "  Recommended source (public domain):",
+        "    https://github.com/danielmiessler/SecLists",
+        "    SecLists/Passwords/Common-Credentials/10-million-password-list-top-10000.txt",
+        "",
+        "  To suppress this message: set PASSCHECK_SUPPRESS_WORDLIST_WARNING=1",
+        "",
+    ]
+    _sys.stderr.write("\n".join(lines) + "\n")
+    _sys.stderr.flush()
+
+# ---------------------------------------------------------------------------
+# Password file loader
+# ---------------------------------------------------------------------------
 
 def _load_common_passwords() -> frozenset[str]:
     """Load common passwords from an external file, falling back to the built-in set."""
-    # NOTE: this module lives one level deeper than the original flat
-    # constants.py (passcheck/constants/common_passwords_loader.py vs.
-    # passcheck/constants.py), so we go up two levels to reach the
-    # passcheck/ package root where data/ lives, not one.
     data_path = _pathlib.Path(__file__).parent.parent / "data" / "common_passwords.txt"
 
     if not data_path.exists():
@@ -51,6 +77,7 @@ def _load_common_passwords() -> frozenset[str]:
             data_path,
             len(_BUILTIN_COMMON_PASSWORDS),
         )
+        _warn_missing_wordlist(data_path)
         return _BUILTIN_COMMON_PASSWORDS
 
     entries_set: set[str] = set()
@@ -75,8 +102,6 @@ def _load_common_passwords() -> frozenset[str]:
                     )
                     break
 
-                # Decode each line individually so a single bad line doesn't
-                # abort the entire load (graceful degradation).
                 try:
                     raw_line = raw_line_bytes.decode("utf-8")
                 except UnicodeDecodeError:
@@ -142,7 +167,7 @@ def _debug_log_pattern_overlaps(
         )
 
 # ---------------------------------------------------------------------------
-# Common-password cache
+# Lock-always singleton (replaces double-checked locking)
 # ---------------------------------------------------------------------------
 
 _COMMON_PASSWORDS_CACHE: frozenset[str] | None = None
@@ -152,12 +177,9 @@ def get_common_passwords() -> frozenset[str]:
     """Return the merged common-password frozenset, loading it on first call."""
     global _COMMON_PASSWORDS_CACHE
 
-    if _COMMON_PASSWORDS_CACHE is not None:
-        return _COMMON_PASSWORDS_CACHE
-
     with _COMMON_PASSWORDS_LOCK:
         if _COMMON_PASSWORDS_CACHE is not None:
-            return _COMMON_PASSWORDS_CACHE  # type: ignore[unreachable]
+            return _COMMON_PASSWORDS_CACHE
 
         try:
             loaded = _load_common_passwords()
@@ -172,18 +194,15 @@ def get_common_passwords() -> frozenset[str]:
                     f"Offending entries: {_sorted_bad[:10]}{_suffix}"
                 )
 
-            # Sanity check: a suspiciously small merged set means common-password
-            # detection coverage is severely degraded.
             if len(loaded) < _MIN_EXPECTED_COMMON_PASSWORDS:
                 _logger.warning(
                     "Common passwords set has only %d entries (expected at "
                     "least %d). Common-password detection coverage may be "
-                    "severely degraded.",
+                    "severely degraded. Ensure data/common_passwords.txt "
+                    "contains at least the SecLists top-10,000 list.",
                     len(loaded), _MIN_EXPECTED_COMMON_PASSWORDS,
                 )
 
-            # Overlap with keyboard patterns — informational only; double-penalty
-            # is already prevented by the skip logic in PasswordAnalyzer.
             _overlap = frozenset(KEYBOARD_PATTERNS) & loaded
             if _overlap:
                 _logger.debug(
@@ -197,7 +216,14 @@ def get_common_passwords() -> frozenset[str]:
 
             _COMMON_PASSWORDS_CACHE = loaded
 
-        except (OSError, ValueError, UnicodeDecodeError, MemoryError) as exc:
+        except MemoryError:
+            _logger.error(
+                "Out-of-memory error while loading the common passwords list. "
+                "The host may be resource-exhausted. Re-raising."
+            )
+            raise
+
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
             _logger.warning(
                 "Unexpected error while loading or validating the common passwords "
                 "list (%s: %s). Falling back to the built-in list (%d variant "
@@ -208,6 +234,4 @@ def get_common_passwords() -> frozenset[str]:
             )
             _COMMON_PASSWORDS_CACHE = _BUILTIN_COMMON_PASSWORDS
 
-        # Return from inside the lock — _COMMON_PASSWORDS_CACHE is guaranteed
-        # to be set by both branches of the try/except above.
         return _COMMON_PASSWORDS_CACHE
