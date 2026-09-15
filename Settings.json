@@ -1,0 +1,42 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+    "python.analysis.venvPath": "${workspaceFolder}",
+    "python.analysis.venv": ".venv",
+
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}"
+    ],
+
+    "python.analysis.typeCheckingMode": "basic",
+
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    },
+
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        ".venv": true,
+        "build": true,
+        "dist": true,
+        "*.egg-info": true
+    },
+    "search.exclude": {
+        ".venv": true,
+        "**/__pycache__": true,
+        "build": true,
+        "dist": true
+    }
+}
