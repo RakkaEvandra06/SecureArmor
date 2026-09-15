@@ -1,0 +1,27 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/pyright/main/packages/pyright/schemas/pyrightconfig.schema.json",
+
+  "include": ["passcheck", "tests"],
+  "exclude": [
+    "**/__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".venv",
+    "venv",
+    ".mypy_cache",
+    ".pytest_cache"
+  ],
+
+  "venvPath": ".",
+  "venv": ".venv",
+
+  "pythonVersion": "3.10",
+
+  "typeCheckingMode": "basic",
+
+  "reportMissingModuleSource": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnusedImport": "warning",
+  "reportPrivateUsage": "warning"
+}
