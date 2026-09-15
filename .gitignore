@@ -1,0 +1,71 @@
+# .gitignore for SecureArmor (passcheck)
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Build / distribution ──────────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+MANIFEST
+
+# ── Python bytecode ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# ── Type-checker caches ───────────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# ── Test / coverage output ────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.lcov
+nosetests.xml
+pytest.xml
+
+# ── Packaging tools ───────────────────────────────────────────────────────────
+pip-wheel-metadata/
+.pip/
+*.whl
+*.tar.gz
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+# VS Code workspace-specific (user-level) files are excluded; the shared
+# .vscode/settings.json, extensions.json are committed.
+.vscode/*.code-workspace
+.vscode/launch.json
+
+.idea/
+*.iml
+*.iws
+*.ipr
+
+*.swp
+*.swo
+*~
+
+# ── OS artefacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Secrets / environment ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Data file (must be supplied separately — see passcheck/data/README.md) ────
+passcheck/data/common_passwords.txt
