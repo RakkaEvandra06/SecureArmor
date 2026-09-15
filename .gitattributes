@@ -1,0 +1,61 @@
+# .gitattributes — line-ending and diff strategy for every file type in this project.
+# https://git-scm.com/docs/gitattributes
+
+# ── Default: normalise line endings to LF on commit ─────────────────────────
+* text=auto eol=lf
+
+# ── Python source ────────────────────────────────────────────────────────────
+*.py     text eol=lf diff=python
+*.pyi    text eol=lf diff=python
+*.pyw    text eol=lf diff=python
+
+# ── PEP 561 marker — tracked explicitly so git never shows it as Untracked ──
+# py.typed is intentionally a tiny text file (may be empty or hold one comment).
+# Tools such as mypy and pyright only check for its existence; content is ignored.
+passcheck/py.typed text eol=lf
+
+# ── Config / data files ──────────────────────────────────────────────────────
+*.toml   text eol=lf
+*.cfg    text eol=lf
+*.ini    text eol=lf
+*.json   text eol=lf
+*.yaml   text eol=lf
+*.yml    text eol=lf
+*.md     text eol=lf
+*.rst    text eol=lf
+*.txt    text eol=lf
+*.sh     text eol=lf
+
+# ── Windows batch scripts keep CRLF ─────────────────────────────────────────
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# ── Binary assets — no line-ending conversion ────────────────────────────────
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.svg    text eol=lf
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.eot    binary
+
+# ── Zip / archive — binary ───────────────────────────────────────────────────
+*.zip    binary
+*.tar    binary
+*.gz     binary
+*.tgz    binary
+*.bz2    binary
+*.7z     binary
+
+# ── Generated / compiled — mark as binary so diffs are not shown ─────────────
+*.pyc    binary
+*.pyd    binary
+*.pyo    binary
+*.so     binary
+*.dll    binary
+*.exe    binary
