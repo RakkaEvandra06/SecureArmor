@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import getpass
 import time
-
 import click
 
 from ..display import print_banner, print_separator
@@ -19,6 +18,7 @@ def interactive_loop(
     *,
     output_json:  bool,
     rate_limit_s: float = DEFAULT_INTERACTIVE_RATE_LIMIT_MS / 1000.0,
+    redact:       bool  = False,
 ) -> None:
     """Run the interactive prompt loop until the user quits."""
     if not output_json:
@@ -52,7 +52,7 @@ def interactive_loop(
             time.sleep(rate_limit_s)
 
         try:
-            run_analysis(pw, output_json=output_json)
+            run_analysis(pw, output_json=output_json, redact=redact)
         except AnalysisError as exc:
             if output_json:
                 emit_json({"event": "error", "detail": exc.detail})
