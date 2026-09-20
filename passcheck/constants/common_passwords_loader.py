@@ -12,7 +12,7 @@ from ..utils import normalise_for_lookup as _normalise_for_lookup
 from .common_passwords_data import RAW_BUILTIN_COMMON_PASSWORDS as _RAW_BUILTIN_COMMON_PASSWORDS
 from .keyboard_patterns import KEYBOARD_PATTERNS
 
-__all__ = ["get_common_passwords"]
+__all__ = ["get_common_passwords", "is_wordlist_sufficient"]
 
 _logger = _logging.getLogger(__name__)
 
@@ -170,12 +170,16 @@ def _debug_log_pattern_overlaps(
 # Lock-always singleton (replaces double-checked locking)
 # ---------------------------------------------------------------------------
 
-_COMMON_PASSWORDS_CACHE: frozenset[str] | None = None
-_COMMON_PASSWORDS_LOCK:  _threading.Lock       = _threading.Lock()
+_COMMON_PASSWORDS_CACHE:      frozenset[str] | None = None
+_COMMON_PASSWORDS_LOCK:       _threading.Lock        = _threading.Lock()
+# SEC-002: tracks whether the loaded set meets the minimum coverage threshold.
+# Written inside _COMMON_PASSWORDS_LOCK and never changed afterward, so reads
+# after get_common_passwords() returns are safe without holding the lock.
+_COMMON_PASSWORDS_SUFFICIENT: bool                   = False
 
 def get_common_passwords() -> frozenset[str]:
     """Return the merged common-password frozenset, loading it on first call."""
-    global _COMMON_PASSWORDS_CACHE
+    global _COMMON_PASSWORDS_CACHE, _COMMON_PASSWORDS_SUFFICIENT
 
     with _COMMON_PASSWORDS_LOCK:
         if _COMMON_PASSWORDS_CACHE is not None:
@@ -234,4 +238,29 @@ def get_common_passwords() -> frozenset[str]:
             )
             _COMMON_PASSWORDS_CACHE = _BUILTIN_COMMON_PASSWORDS
 
+        # SEC-002: Record whether the loaded set is large enough to produce
+        # a reliable "not found" verdict. Written once, inside the lock.
+        _COMMON_PASSWORDS_SUFFICIENT = (
+            len(_COMMON_PASSWORDS_CACHE) >= _MIN_EXPECTED_COMMON_PASSWORDS
+        )
+
         return _COMMON_PASSWORDS_CACHE
+
+
+def is_wordlist_sufficient() -> bool:
+    """Return ``True`` when the loaded common-password list meets the minimum
+    coverage threshold (:data:`_MIN_EXPECTED_COMMON_PASSWORDS` entries).
+
+    Calling this function guarantees the list is loaded (same side-effect as
+    :func:`get_common_passwords`).  A ``False`` result means the criterion
+    should skip rather than return a false-negative "not found" verdict when
+    a password is not matched — this is the *fail-closed* behaviour described
+    in SEC-002 of the security audit.
+
+    Thread-safety: the underlying ``_COMMON_PASSWORDS_SUFFICIENT`` flag is set
+    inside ``_COMMON_PASSWORDS_LOCK`` by :func:`get_common_passwords` and is
+    never modified afterward, so reading it after the call below returns is
+    safe without holding the lock.
+    """
+    get_common_passwords()          # ensures the flag has been written
+    return _COMMON_PASSWORDS_SUFFICIENT
