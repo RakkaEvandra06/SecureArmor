@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import unicodedata
 
-from ..constants import LENGTH_MAXIMUM, MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN, get_common_passwords
+from ..constants import (
+    LENGTH_MAXIMUM,
+    MAX_PERCENT_FOR_KNOWN_WEAK_PATTERN,
+    get_common_passwords,
+    is_wordlist_sufficient,
+)
 from ..models import CriterionResult, PasswordAnalysis
 from ..utils import ascii_residue_length, masked_password, normalise_for_lookup, split_graphemes
 from .character import (
@@ -50,7 +55,13 @@ class PasswordAnalyzer:
 
         lookup_variants = normalise_for_lookup(password)
         can_lookup = bool(lookup_variants)
-        is_common  = can_lookup and bool(lookup_variants & get_common_passwords())
+        # SEC-002: capture both the lookup result and the wordlist sufficiency
+        # flag in a single pass so the criterion can distinguish "not found in
+        # a large-enough list" (safe pass) from "not found in the tiny built-in
+        # fallback" (must skip to avoid a false-negative verdict).
+        common_passwords    = get_common_passwords()
+        wordlist_ok         = is_wordlist_sufficient()
+        is_common           = can_lookup and bool(lookup_variants & common_passwords)
         # Distinguishes "too short to look up" (e.g. 'cat') from "genuinely
         # has no ASCII-equivalent form" (e.g. an all-CJK/emoji password) so
         # the skip_reason reported to callers is accurate in both cases.
@@ -73,8 +84,11 @@ class PasswordAnalyzer:
             criterion_char_variety(password),
             criterion_char_uniqueness(graphemes, length),
             criterion_no_common_password(
-                is_common=is_common, can_lookup=can_lookup, length=length,
+                is_common=is_common,
+                can_lookup=can_lookup,
+                length=length,
                 has_ascii_residue=has_ascii_residue,
+                wordlist_sufficient=wordlist_ok,   # SEC-002: fail-closed
             ),
             keyboard_result,
             criterion_no_repeated_chars(graphemes, length, is_common=is_common),
