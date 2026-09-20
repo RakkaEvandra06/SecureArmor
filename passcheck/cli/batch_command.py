@@ -26,6 +26,18 @@ __all__ = ["batch"]
     help="Output results as JSON.",
 )
 @click.option(
+    "--redact",
+    "redact_password",
+    is_flag=True,
+    default=False,
+    help=(
+        "Replace the password's masked form with '[REDACTED]' in all output. "
+        "Recommended when batch output is logged or stored — even the masked "
+        "form (first char, last char, exact length) constitutes partial "
+        "credential disclosure. (SA-M04)"
+    ),
+)
+@click.option(
     "--rate-limit", "rate_limit_ms",
     type=float,
     default=0.0,
@@ -36,7 +48,12 @@ __all__ = ["batch"]
         "Example: --rate-limit=100 limits throughput to 10 analyses/second."
     ),
 )
-def batch(ctx: click.Context, output_json: bool, rate_limit_ms: float) -> None:
+def batch(
+    ctx:             click.Context,
+    output_json:     bool,
+    redact_password: bool,
+    rate_limit_ms:   float,
+) -> None:
     """Analyse multiple passwords from stdin (one per line)."""
     if sys.stdin.isatty():
         click.echo(
@@ -59,7 +76,11 @@ def batch(ctx: click.Context, output_json: bool, rate_limit_ms: float) -> None:
             err=True,
         )
 
-    _run_batch(output_json=output_json, rate_limit_s=rate_limit_ms / 1000.0)
+    _run_batch(
+        output_json=output_json,
+        rate_limit_s=rate_limit_ms / 1000.0,
+        redact=redact_password,
+    )
 
 # ---------------------------------------------------------------------------
 # Batch helper
@@ -71,8 +92,16 @@ def _warn_invalid_password(
     output_json: bool,
     reason: str,
     line_num: int = 0,
+    redact: bool = False,
 ) -> None:
-    """Emit a per-line warning for a password that was skipped in batch mode."""
+    """Emit a per-line warning for a password that was skipped in batch mode.
+
+    SEC-004: the *redact* flag suppresses the ``length`` and ``limit`` fields
+    from the JSON payload.  Knowing the exact character count of an oversized
+    credential is itself partial information about that credential, so it must
+    be treated the same way as the masked password form when ``--redact`` is
+    active.
+    """
     glen = _grapheme_len(pw) if pw else None
     if output_json:
         payload: dict[str, object] = {
@@ -80,7 +109,8 @@ def _warn_invalid_password(
             "line":   line_num,
             "detail": reason,
         }
-        if glen is not None:
+        # SEC-004: only include length metadata when redact is not requested.
+        if glen is not None and not redact:
             payload["length"] = glen
             payload["limit"]  = LENGTH_MAXIMUM
         emit_json(payload)
@@ -88,7 +118,12 @@ def _warn_invalid_password(
         loc = f"line {line_num}: " if line_num else ""
         click.echo(f"Warning: {loc}{reason}", err=True)
 
-def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
+def _run_batch(
+    *,
+    output_json:  bool,
+    rate_limit_s: float = 0.0,
+    redact:       bool  = False,
+) -> None:
     """Stream analysis results for all passwords arriving on stdin."""
     found_any     = False
     need_sep      = False
@@ -99,11 +134,9 @@ def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
             found_any = True
 
             if pw is None:
-                # The line never produced a candidate password (oversized or
-                # undecodable) — still counts as a failure for exit-code
-                # purposes, and is reported against its real file line number.
                 _warn_invalid_password(
-                    "", output_json=output_json, reason=skip_reason, line_num=line_num,
+                    "", output_json=output_json, reason=skip_reason,
+                    line_num=line_num, redact=redact,
                 )
                 failure_count += 1
                 continue
@@ -114,8 +147,11 @@ def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
             try:
                 pw = nfc_and_check_length(pw)
             except PasswordTooLongError as exc:
+                # SEC-004: pass redact so the JSON error event omits the exact
+                # character count when the caller has requested redaction.
                 _warn_invalid_password(
-                    pw, output_json=output_json, reason=str(exc), line_num=line_num,
+                    pw, output_json=output_json, reason=str(exc),
+                    line_num=line_num, redact=redact,
                 )
                 failure_count += 1
                 continue
@@ -123,14 +159,15 @@ def _run_batch(*, output_json: bool, rate_limit_s: float = 0.0) -> None:
             if rate_limit_s > 0:
                 time.sleep(rate_limit_s)
             try:
-                run_analysis(pw, output_json=output_json)
+                run_analysis(pw, output_json=output_json, redact=redact)
             except AnalysisError as exc:
                 reason = exc.detail or (
                     f"Password of length {_grapheme_len(pw)} could not be "
                     "analysed and was skipped."
                 )
                 _warn_invalid_password(
-                    pw, output_json=output_json, reason=reason, line_num=line_num,
+                    pw, output_json=output_json, reason=reason,
+                    line_num=line_num, redact=redact,
                 )
                 failure_count += 1
 
