@@ -1,16 +1,9 @@
-"""Security gate for the insecure --password flag.
-
-Click callback + warning message that requires an explicit environment
-opt-in before --password (which leaks via shell history and the OS
-process list) can be used at all.
-"""
+"""Security gate for the insecure --password flag."""
 from __future__ import annotations
+from .exit_codes import ExitCode
 
 import os
-
 import click
-
-from .exit_codes import ExitCode
 
 __all__ = [
     "DEFAULT_INTERACTIVE_RATE_LIMIT_MS",
@@ -19,17 +12,26 @@ __all__ = [
 ]
 
 DEFAULT_INTERACTIVE_RATE_LIMIT_MS: float = 50.0
-
 INSECURE_FLAG_ENV_GATE: str = "PASSCHECK_ALLOW_INSECURE_FLAG"
 
 INSECURE_FLAG_WARNING: str = (
     "WARNING: The --password flag is inherently insecure.\n"
     "  • Your shell records the value in its history file.\n"
     "  • Every major OS exposes process command-line arguments before any\n"
-    "    Python code runs — they are visible to other users and monitoring\n"
-    "    tools (Task Manager, Activity Monitor, ps, /proc/<pid>/cmdline …).\n"
-    "Use --password-env <VAR> for safer scripting, or run 'passcheck' with\n"
-    "no flags for the secure interactive prompt.\n"
+    "    Python code runs — they are visible to all users via tools such as\n"
+    "    'ps aux', Task Manager, Activity Monitor, and /proc/<pid>/cmdline\n"
+    "    on Linux (readable by any process sharing the same UID, and root).\n"
+    "\n"
+    "Safer alternatives:\n"
+    "  • --password-env <VAR>  — reads from an environment variable instead\n"
+    "    of the argument vector.  Better than --password, but note that the\n"
+    "    variable value is still visible in /proc/<pid>/environ on Linux\n"
+    "    (readable by the process owner and root).\n"
+    "    Avoid inline assignment (VAR=secret passcheck ...) — most shells\n"
+    "    record that form in history just like a plain argument.\n"
+    "  • Interactive prompt (no flags)  — uses getpass, which suppresses\n"
+    "    echo and does not appear in the argument vector or environment.\n"
+    "    This is the highest-security option.\n"
 )
 
 def _warn_insecure_flag() -> None:
