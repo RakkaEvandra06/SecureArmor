@@ -42,12 +42,12 @@ __all__ = ["check"]
     default=None,
     help=(
         "Name of an environment variable that holds the password to analyse. "
-        "Safer than --password: environment variables are not visible in the OS "
-        "process list. To also avoid shell-history exposure, set the variable on "
-        "its own line first (an inline 'VAR=secret cmd' is still recorded in most "
-        "shells' history just like --password is), e.g.:\n"
-        "  export PASSCHECK_PW=secret\n"
-        "  passcheck check --password-env PASSCHECK_PW"
+        "Safer than --password: the value is not in the OS process argument vector. "
+        "Note: the variable value is still visible in /proc/<pid>/environ on Linux "
+        "(readable by the process owner and root). "
+        "Avoid inline assignment (VAR=secret passcheck ...) — most shells record "
+        "that form in history. "
+        "For highest security, use the interactive prompt (no flags)."
     ),
 )
 @click.option(
@@ -55,6 +55,19 @@ __all__ = ["check"]
     is_flag=True,
     default=False,
     help="Output results as JSON.",
+)
+@click.option(
+    "--redact",
+    "redact_password",
+    is_flag=True,
+    default=False,
+    help=(
+        "Replace the password's masked form with '[REDACTED]' in all output. "
+        "Recommended whenever output may be logged, forwarded, or stored: "
+        "even the masked form (first character, last character, exact length) "
+        "constitutes a partial credential disclosure that persists in logs. "
+        "(SA-M04)"
+    ),
 )
 @click.option(
     "--rate-limit", "rate_limit_ms",
@@ -69,10 +82,11 @@ __all__ = ["check"]
     ),
 )
 def check(
-    password:      str | None,
-    password_env:  str | None,
-    output_json:   bool,
-    rate_limit_ms: float,
+    password:        str | None,
+    password_env:    str | None,
+    output_json:     bool,
+    redact_password: bool,
+    rate_limit_ms:   float,
 ) -> None:
     """Analyse a single password."""
     if password is not None and password_env is not None:
@@ -107,7 +121,7 @@ def check(
         if rate_limit_ms > 0:
             time.sleep(rate_limit_ms / 1000.0)
         try:
-            run_analysis(pw, output_json=output_json)
+            run_analysis(pw, output_json=output_json, redact=redact_password)
         except AnalysisError as exc:
             if output_json:
                 emit_json({"event": "error", "detail": exc.detail})
@@ -132,9 +146,8 @@ def check(
             raise SystemExit(ExitCode.ERROR) from exc
         if rate_limit_ms > 0:
             time.sleep(rate_limit_ms / 1000.0)
-        # DESIGN-06: same pattern as --password-env path above.
         try:
-            run_analysis(password, output_json=output_json)
+            run_analysis(password, output_json=output_json, redact=redact_password)
         except AnalysisError as exc:
             if output_json:
                 emit_json({"event": "error", "detail": exc.detail})
@@ -163,4 +176,5 @@ def check(
         interactive_loop(
             output_json=output_json,
             rate_limit_s=rate_limit_ms / 1000.0,
+            redact=redact_password,
         )
