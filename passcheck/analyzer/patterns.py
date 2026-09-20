@@ -19,9 +19,30 @@ __all__ = [
 ]
 
 def criterion_no_common_password(
-    *, is_common: bool, can_lookup: bool, length: int,
-    has_ascii_residue: bool,
+    *,
+    is_common:           bool,
+    can_lookup:          bool,
+    length:              int,
+    has_ascii_residue:   bool,
+    wordlist_sufficient: bool = True,
 ) -> CriterionResult:
+    """Return a :class:`CriterionResult` for the common-password check.
+
+    The ``wordlist_sufficient`` flag implements *fail-closed* behaviour
+    (SEC-002): when the loaded common-password list is too small to produce a
+    reliable "not found" verdict, a ``NOT is_common`` result is treated as
+    *unknowable* rather than *safe*, so the criterion is **skipped** with
+    :attr:`~passcheck.models.SkipReason.NO_WORDLIST_AVAILABLE` instead of
+    passing.  A positive hit (``is_common=True``) is always reported regardless
+    of list size — a partial list can still find known-bad passwords.
+
+    Parameters
+    ----------
+    wordlist_sufficient:
+        ``True`` when the loaded set meets the minimum coverage threshold
+        (default ``True`` for backward compatibility with callers that do not
+        yet pass this argument).
+    """
     weight = SCORE_WEIGHTS["no_common_password"]
 
     if not can_lookup:
@@ -55,14 +76,42 @@ def criterion_no_common_password(
             skip_reason=SkipReason.UNICODE_ONLY_PASSWORD,
         )
 
-    passed = not is_common
+    # SEC-002: If the password IS found in the list, always report it as
+    # common regardless of list size — a hit from a small list is still a hit.
+    if is_common:
+        return CriterionResult(
+            name="Not a Common Password",
+            passed=False,
+            score=0,
+            max_score=weight,
+            detail="found in common password list",
+            suggestion="Choose a password that isn't on common password lists.",
+        )
+
+    # SEC-002: The password was NOT found, but if the list is too small we
+    # cannot conclude it is genuinely uncommon.  Skip rather than pass to
+    # avoid false-negative "not found" verdicts.
+    if not wordlist_sufficient:
+        return CriterionResult(
+            name="Not a Common Password",
+            passed=False,
+            score=0,
+            max_score=weight,
+            detail=(
+                "skipped — common-password list coverage is too limited for a "
+                "reliable result (see startup warning for remediation steps)"
+            ),
+            skipped=True,
+            skip_reason=SkipReason.NO_WORDLIST_AVAILABLE,
+        )
+
+    # Large-enough list + not found → genuinely pass.
     return CriterionResult(
         name="Not a Common Password",
-        passed=passed,
-        score=weight if passed else 0,
+        passed=True,
+        score=weight,
         max_score=weight,
-        detail="not found in common password list" if passed else "found in common password list",
-        suggestion="" if passed else "Choose a password that isn't on common password lists.",
+        detail="not found in common password list",
     )
 
 def criterion_no_keyboard_pattern(
