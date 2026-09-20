@@ -8,7 +8,10 @@ __all__ = [
     "LENGTH_MAXIMUM",
     "ENTROPY_GOOD_THRESHOLD",
     "SHANNON_WEIGHT",
-    "NON_ASCII_POOL_SIZE",
+    # NON_ASCII_POOL_SIZE is intentionally omitted from __all__ (BUG-003).
+    # The constant remains defined below for backward compatibility but is
+    # deprecated.  New code must use the per-block pool sizes in
+    # passcheck.analyzer.entropy._UNICODE_BLOCK_POOLS instead.
     "REPEATED_CHAR_RATIO",
     "CHAR_UNIQUENESS_MIN_RATIO",
     "CHAR_CLASS_COUNT",
@@ -45,7 +48,15 @@ SHANNON_WEIGHT: float = 0.6   # blend factor: 40 % pool, 60 % Shannon
 if not (0.0 < SHANNON_WEIGHT < 1.0):
     raise ValueError(f"SHANNON_WEIGHT must be in (0, 1), got {SHANNON_WEIGHT!r}.")
 
-NON_ASCII_POOL_SIZE: int = 32_768   # deprecated — see SA-H02 above
+# DEPRECATED (BUG-003): This constant used a fixed 32 768 which caused severe
+# entropy overestimation for small Unicode scripts (e.g. Hiragana has only
+# 96 assignable characters, not 32 768).  passcheck.analyzer.entropy now
+# derives per-block pool sizes from _UNICODE_BLOCK_POOLS with a conservative
+# 128-character fallback for unrecognised blocks.
+# The name is kept for one release cycle so that external code that imports
+# it continues to work (with a DeprecationWarning via constants.__getattr__).
+# It will be removed in a future version.
+NON_ASCII_POOL_SIZE: int = 32_768
 
 # ---------------------------------------------------------------------------
 # Repeated-character threshold
