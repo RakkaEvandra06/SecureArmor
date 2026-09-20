@@ -91,12 +91,30 @@ def criterion_has_special(pw: str) -> CriterionResult:
 
 def criterion_char_variety(pw: str) -> CriterionResult:
     weight = SCORE_WEIGHTS["char_variety"]
+    # BUG-002: The fifth class captures non-ASCII characters that have no
+    # ASCII-digit equivalent (Arabic-Indic digits, Devanagari digits, etc.
+    # return True for c.isdigit() but False for c.isascii()).  Previously
+    # those digits would satisfy this class while still failing the dedicated
+    # ASCII-digit criterion (criterion_has_digit), producing contradictory
+    # feedback ("you have variety" but "add a digit 0-9").
+    #
+    # Fix: add `and not c.isdigit()` so non-ASCII numeric characters are
+    # excluded from the "other Unicode" class.  A password that consists
+    # entirely of Arabic-Indic digits now correctly shows 0/5 classes and
+    # receives the "add a digit (0-9)" suggestion without also receiving
+    # partial variety credit.
     classes_present = [
-        any(c.isupper() for c in pw),
-        any(c.islower() for c in pw),
-        any(c.isascii() and c.isdigit() for c in pw),
-        any(c in SPECIAL_CHARS_SET for c in pw),
-        any(not c.isascii() and not c.isupper() and not c.islower() for c in pw),
+        any(c.isupper() for c in pw),                                            # class 1: uppercase
+        any(c.islower() for c in pw),                                            # class 2: lowercase
+        any(c.isascii() and c.isdigit() for c in pw),                           # class 3: ASCII digit
+        any(c in SPECIAL_CHARS_SET for c in pw),                                # class 4: special char
+        any(                                                                     # class 5: other Unicode
+            not c.isascii()
+            and not c.isupper()
+            and not c.islower()
+            and not c.isdigit()   # ← excludes non-ASCII digits (BUG-002 fix)
+            for c in pw
+        ),
     ]
 
     classes = sum(classes_present)
