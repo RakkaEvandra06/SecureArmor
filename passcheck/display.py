@@ -1,3 +1,4 @@
+"""Terminal rendering for password analysis results."""
 from __future__ import annotations
 
 import json
@@ -9,7 +10,7 @@ import colorama
 from colorama import Fore, Style
 
 from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
-from .models import PasswordAnalysis, compute_score_percent
+from .models import PasswordAnalysis, SkipReason, compute_score_percent
 from .scoring import criteria_summary, score_bar
 from .utils import is_utf_terminal as _is_utf_terminal
 
@@ -22,11 +23,8 @@ _COLORAMA_INITIALISED: bool           = False
 def _ensure_colorama_init() -> None:
     """Initialise colorama exactly once; thread-safe via double-checked locking."""
     global _COLORAMA_INITIALISED
-    # Fast path: if already initialised, no lock acquisition needed.
     if not _COLORAMA_INITIALISED:
         with _COLORAMA_LOCK:
-            # Re-check inside the lock: another thread may have completed
-            # initialisation while we were waiting to acquire it.
             if not _COLORAMA_INITIALISED:
                 colorama.init(autoreset=True)
                 _COLORAMA_INITIALISED = True
@@ -99,21 +97,35 @@ def _rjust_ansi(s: str, width: int) -> str:
     return " " * max(width - _visible_len(s), 0) + s
 
 # ---------------------------------------------------------------------------
+# Unicode-skip detection helper
+# ---------------------------------------------------------------------------
+
+def _has_unicode_only_skip(analysis: PasswordAnalysis) -> bool:
+    """Return True when any criterion was skipped due to a Unicode-only password."""
+    return any(
+        c.skip_reason == SkipReason.UNICODE_ONLY_PASSWORD
+        for c in analysis.criteria
+        if c.skipped
+    )
+
+# ---------------------------------------------------------------------------
 # Public rendering functions
 # ---------------------------------------------------------------------------
 
-def print_analysis(analysis: PasswordAnalysis) -> None:
+def print_analysis(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
     """Render a full human-readable analysis block to stdout."""
     _ensure_colorama_init()
-    _print_header(analysis)
+    _print_header(analysis, redact=redact)
     _print_score_panel(analysis)
     _print_criteria_table(analysis)
     if analysis.suggestions:
         _print_suggestions(analysis)
+    if _has_unicode_only_skip(analysis):
+        _print_unicode_advisory()
 
-def print_analysis_json(analysis: PasswordAnalysis) -> None:
+def print_analysis_json(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
     """Render *analysis* as a compact JSON line (NDJSON-compatible) to stdout."""
-    print(json.dumps(criteria_summary(analysis)))
+    print(json.dumps(criteria_summary(analysis, redact=redact)))
 
 def print_banner() -> None:
     """Print the PassCheck welcome banner to stdout."""
@@ -143,12 +155,18 @@ def print_separator() -> None:
 # Private rendering helpers
 # ---------------------------------------------------------------------------
 
-def _print_header(analysis: PasswordAnalysis) -> None:
-    """Print the password header line using the pre-masked form from the model."""
-    print(
-        f"\n  {_bold('Password:')} {_dim(analysis.password_masked)}"
-        f"  {_dim(f'({analysis.password_length} chars)')}"
-    )
+def _print_header(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
+    """Print the password header line.
+
+    SEC-001: When *redact* is ``True`` the masked form is replaced with
+    ``[REDACTED]`` **and** the character count is omitted — the exact length
+    is itself partial credential information.
+    """
+    display_pw = "[REDACTED]" if redact else analysis.password_masked
+    # SEC-001: omit the (N chars) suffix entirely when redact is active so
+    # that captured output does not leak the password length.
+    length_part = "" if redact else f"  {_dim(f'({analysis.password_length} chars)')}"
+    print(f"\n  {_bold('Password:')} {_dim(display_pw)}{length_part}")
 
 def _print_score_panel(analysis: PasswordAnalysis) -> None:
     """Print the score bar, strength label, entropy, and criteria counts."""
@@ -174,9 +192,18 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
         f"  {_bold(_coloured(f'{score:>3}/{denom}', color))}"
         f"  {_bold(_coloured(f'[{analysis.strength_label}]', color))}"
     )
+    # SEC-003: when the score cap fired, the raw entropy number is a
+    # theoretical character-distribution estimate that overstates real-world
+    # resistance.  Show a brief inline note so users are not misled by a high
+    # bit count next to a capped / "Weak" strength label.
+    entropy_note = (
+        " (theoretical; pattern cap applied — see suggestions)"
+        if analysis.weak_pattern_cap_applied
+        else ""
+    )
     print(
         _dim(
-            f"  Entropy: {analysis.entropy_bits:.1f} bits"
+            f"  Entropy: {analysis.entropy_bits:.1f} bits{entropy_note}"
             f"   Criteria: {analysis.passed_count}/{analysis.total_criteria} passed"
         )
     )
@@ -214,3 +241,18 @@ def _print_suggestions(analysis: PasswordAnalysis) -> None:
     print(f"  {_coloured(_bold('Suggestions'), 'yellow')}")
     for i, tip in enumerate(analysis.suggestions, start=1):
         print(f"   {_coloured(str(i) + '.', 'yellow')} {tip}")
+
+def _print_unicode_advisory() -> None:
+    """Print an advisory when common-password / keyboard checks were skipped."""
+    icon = "⚠" if _UTF_TERMINAL else "!"
+    print(
+        _coloured(
+            f"  {icon} Unicode-only password detected: common-password and\n"
+            "    keyboard-walk checks were skipped (no ASCII residue to match\n"
+            "    against known weak-pattern lists).  Verify independently that\n"
+            "    this password does not follow a predictable or widely-used\n"
+            "    pattern (e.g. a popular emoji sequence or common CJK phrase).",
+            "yellow",
+        )
+    )
+    print()
