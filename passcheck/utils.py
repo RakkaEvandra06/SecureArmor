@@ -1,3 +1,5 @@
+"""Shared utilities: terminal detection, password masking, grapheme splitting,
+structural repetition, and leet-speak normalisation."""
 from __future__ import annotations
 
 import codecs
@@ -38,7 +40,7 @@ _MASK_FULL_BELOW:        int = 6
 _MASK_SINGLE_EDGE_BELOW: int = 8
 
 try:
-    import grapheme as _grapheme
+    import grapheme as _grapheme  # type: ignore[import]  — optional runtime dep; absence handled below
 
     def split_graphemes(s: str) -> list[str]:
         """Split *s* into user-perceived grapheme clusters (Unicode-aware)."""
@@ -94,25 +96,21 @@ def masked_password(password: str) -> str:
     # Standard display: first and last characters visible.
     return chars[0] + "*" * (length - 2) + chars[-1]
 
-# ---------------------------------------------------------------------------
-# Leet-speak normalisation
-# ---------------------------------------------------------------------------
-
 _leet_source: dict[str, str] = {
-    "@": "a", "4": "a",
-    "3": "e", "\N{EURO SIGN}": "e",        # 3 → e, € → e
-    "1": "i",                              # adm1n    → admin
-    "!": "i",                              # pass!on  → passion
-    "|": "l",                              # adm|n    → admln  (matches admin)
-    "6": "g",                              # 6ame     → game
-    "9": "g",                              # an9el    → angel
-    "8": "b",                              # 8ball    → bball
+    "@": "a", "4": "a", "^": "a",      # "^"
+    "3": "e", "\N{EURO SIGN}": "e",    # 3 → e, € → e
+    "1": "i",                          # adm1n    → admin
+    "!": "i",                          # pass!on  → passion
+    "|": "l", "\\": "l",               # "\\" (backslash → l)
+    "6": "g",                          # 6ame     → game
+    "9": "g",                          # an9el    → angel
+    "8": "b",                          # 8ball    → bball
     "0": "o",
     "5": "s", "$": "s",
     "7": "t",
-    "+": "t",                              # s+rong   → strong
-    "(": "c",                              # (hocolate → chocolate
-    "2": "z",                              # cra2y    → crazy
+    "+": "t",                          # s+rong   → strong
+    "(": "c",                          # (hocolate → chocolate
+    "2": "z",                          # cra2y    → crazy
 }
 
 LEET_TABLE: dict[int, int] = str.maketrans(
