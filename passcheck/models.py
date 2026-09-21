@@ -19,6 +19,10 @@ class SkipReason(str, Enum):
     UNICODE_ONLY_PASSWORD      = "unicode_only_password"
     TOO_SHORT_FOR_LOOKUP       = "too_short_for_lookup"
     EMPTY_PASSWORD             = "empty_password"
+    # SEC-002: Added to support fail-closed behaviour when the built-in
+    # common-password list is the only source and its coverage is too small
+    # to produce a reliable "not found" verdict.
+    NO_WORDLIST_AVAILABLE      = "no_wordlist_available"
 
 @dataclass(frozen=True)
 class CriterionResult:
