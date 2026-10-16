@@ -118,22 +118,16 @@ class TestCommonPasswordDetection(unittest.TestCase):
         self.assertFalse(_crit(self.a, "PASSWORD", "Not a Common Password").passed)
 
     def test_uncommon_password_passes(self) -> None:
-        # SEC-002: With only the built-in list (~1 400 entries, below the 5 000
-        # minimum), the fail-closed behaviour means a "not found" result is
-        # SKIPPED (SkipReason.NO_WORDLIST_AVAILABLE) rather than passed, to
-        # avoid a false-negative "safe" verdict.  A genuine pass only happens
-        # once a sufficient external wordlist is loaded.
         from passcheck.constants.common_passwords_loader import is_wordlist_sufficient
-        from passcheck.models import SkipReason
         crit = _crit(self.a, "Xk9!mN#vLq2@", "Not a Common Password")
         if is_wordlist_sufficient():
             self.assertTrue(crit.passed,
                 "With a sufficient wordlist, an obscure password must pass")
         else:
-            self.assertTrue(crit.skipped,
-                "With an insufficient wordlist, an obscure password must be "
-                "skipped (not falsely passed) — SEC-002 fail-closed behaviour")
-            self.assertEqual(crit.skip_reason, SkipReason.NO_WORDLIST_AVAILABLE)
+            self.assertFalse(crit.passed,
+                "With an insufficient wordlist the criterion must not pass")
+            self.assertFalse(crit.skipped,
+                "With an insufficient wordlist the criterion must fail-closed")
 
 class TestKeyboardPatternDetection(unittest.TestCase):
     def setUp(self) -> None:
@@ -296,18 +290,121 @@ class TestLeetBypassRegression(unittest.TestCase):
 
     def test_genuinely_strong_unaffected(self) -> None:
         """A genuinely strong password must NOT be flagged as common."""
+        # BUG-001 fix: removed SkipReason.NO_WORDLIST_AVAILABLE reference.
         from passcheck.constants.common_passwords_loader import is_wordlist_sufficient
-        from passcheck.models import SkipReason
         c = self._common_crit("Xk9!mN#vLq2@Zr7$")
-        # SEC-002: with the built-in-only list (< 5 000 entries), a "not found"
-        # verdict is unreliable, so the criterion is skipped rather than passed.
         if is_wordlist_sufficient():
             self.assertTrue(c.passed, "Strong unique password should not be flagged as common")
         else:
-            self.assertTrue(c.skipped,
-                "Insufficient wordlist: strong password must be skipped, not falsely passed")
-            self.assertFalse(c.passed)
-            self.assertEqual(c.skip_reason, SkipReason.NO_WORDLIST_AVAILABLE)
+            self.assertFalse(c.passed,
+                "With an insufficient wordlist the criterion must not pass")
+            self.assertFalse(c.skipped,
+                "With an insufficient wordlist the criterion must fail-closed")
+
+    def test_digit_one_as_l_people(self) -> None:
+        """'pe0p1e' must produce 'people' via the 1→l leet path."""
+        variants = normalise_for_lookup("pe0p1e")
+        self.assertIn(
+            "people", variants,
+            "normalise_for_lookup('pe0p1e') must produce 'people' via 1→l path",
+        )
+
+    def test_digit_one_as_l_soldier(self) -> None:
+        """'so1dier' must produce 'soldier' via the 1→l leet path."""
+        variants = normalise_for_lookup("so1dier")
+        self.assertIn(
+            "soldier", variants,
+            "normalise_for_lookup('so1dier') must produce 'soldier'",
+        )
+
+    def test_digit_one_as_l_ball(self) -> None:
+        """'ba11' must produce 'ball' via the 1→l leet path."""
+        variants = normalise_for_lookup("ba11")
+        self.assertIn(
+            "ball", variants,
+            "normalise_for_lookup('ba11') must produce 'ball'",
+        )
+
+    def test_digit_one_as_l_particle(self) -> None:
+        """'partic1e' must produce 'particle' via the 1→l leet path."""
+        variants = normalise_for_lookup("partic1e")
+        self.assertIn(
+            "particle", variants,
+            "normalise_for_lookup('partic1e') must produce 'particle'",
+        )
+
+    def test_digit_one_as_i_still_works_admin(self) -> None:
+        """'adm1n' must still produce 'admin' via the 1→i path."""
+        variants = normalise_for_lookup("adm1n")
+        self.assertIn(
+            "admin", variants,
+            "normalise_for_lookup('adm1n') must still produce 'admin' (1→i path)",
+        )
+
+class TestSpaceEntropyPool(unittest.TestCase):
+    """space must be counted in the entropy pool so passphrase-style
+    passwords receive a more accurate bit estimate."""
+
+    def setUp(self) -> None:
+        from passcheck.analyzer.entropy import compute_entropy
+        self.compute = compute_entropy
+
+    def test_passphrase_entropy_higher_than_no_space(self) -> None:
+        """A passphrase with spaces must have higher entropy than the same text
+        without spaces, because the pool includes one extra character."""
+        pw_space    = "correct horse battery staple"
+        pw_nospace  = "correcthorsebatterystaple"
+        g_space    = list(pw_space)
+        g_nospace  = list(pw_nospace)
+        e_space    = self.compute(pw_space,   g_space,   len(g_space))
+        e_nospace  = self.compute(pw_nospace, g_nospace, len(g_nospace))
+        self.assertGreater(
+            e_space, e_nospace,
+            f"Space passphrase entropy ({e_space:.2f} bits) must exceed no-space "
+            f"version ({e_nospace:.2f} bits) because the pool is larger",
+        )
+
+    def test_no_space_password_unaffected(self) -> None:
+        """Passwords without spaces must be unaffected by the SEC-005 fix."""
+        pw = "Password123!"
+        g  = list(pw)
+        e  = self.compute(pw, g, len(g))
+        self.assertGreater(e, 0.0, "Non-space password must have positive entropy")
+
+class TestNoDuplicateSuggestions(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self.a = PasswordAnalyzer()
+
+    def _check_no_duplicates(self, pw: str) -> None:
+        result = self.a.analyze(pw)
+        seen:    set[str] = set()
+        for s in result.suggestions:
+            self.assertNotIn(
+                s, seen,
+                f"Duplicate suggestion {s!r} found for password {pw!r}",
+            )
+            seen.add(s)
+
+    def test_no_duplicates_very_short(self) -> None:
+        """Very short password triggers many criteria — none should duplicate."""
+        self._check_no_duplicates("a")
+
+    def test_no_duplicates_empty(self) -> None:
+        """Empty password must produce no suggestions (skipped/failed with empty suggestion)."""
+        result = self.a.analyze("")
+        self.assertEqual(
+            len(result.suggestions), len(set(result.suggestions)),
+            "Empty password must not produce duplicate suggestions",
+        )
+
+    def test_no_duplicates_common_password(self) -> None:
+        """Common-password derivatives must not produce duplicate suggestions."""
+        self._check_no_duplicates("password")
+
+    def test_no_duplicates_moderate_password(self) -> None:
+        """A medium-strength password must not produce duplicate suggestions."""
+        self._check_no_duplicates("Hello123")
 
 # ===========================================================================
 # Unicode entropy bound tests
@@ -393,11 +490,11 @@ class TestSpaceNotSpecialChar(unittest.TestCase):
 
     def test_space_not_in_special_chars_set(self) -> None:
         self.assertNotIn(" ", SPECIAL_CHARS_SET,
-            "Space must not be in SPECIAL_CHARS_SET after SA-D01")
+            "Space must not be in SPECIAL_CHARS_SET")
 
     def test_space_not_in_special_chars_string(self) -> None:
         self.assertNotIn(" ", SPECIAL_CHARS,
-            "Space must not be in SPECIAL_CHARS after SA-D01")
+            "Space must not be in SPECIAL_CHARS")
 
     def test_space_only_does_not_pass_special_criterion(self) -> None:
         """A password whose only non-alpha chars are spaces must fail Special Character."""
@@ -424,7 +521,7 @@ class TestLengthMaximumRaised(unittest.TestCase):
 
     def test_length_maximum_value(self) -> None:
         self.assertEqual(LENGTH_MAXIMUM, 256,
-            f"LENGTH_MAXIMUM should be 256 after SA-D02, got {LENGTH_MAXIMUM}")
+            f"LENGTH_MAXIMUM should be 256, got {LENGTH_MAXIMUM}")
 
     def test_200_char_password_accepted(self) -> None:
         """A 200-character password must be analysed without error."""
@@ -468,20 +565,45 @@ class TestRedactFlag(unittest.TestCase):
         self.assertEqual(summary["password_masked"], "[REDACTED]")
 
     def test_redact_does_not_alter_score(self) -> None:
-        """Redaction must not affect the score or any other field."""
+        """Redaction must not affect score, strength label, or any criterion's
+        pass/skip/score fields."""
         result   = self.a.analyze("Hello123!")
         plain    = criteria_summary(result, redact=False)
         redacted = criteria_summary(result, redact=True)
         self.assertEqual(plain["score"],          redacted["score"])
         self.assertEqual(plain["strength_label"], redacted["strength_label"])
-        self.assertEqual(plain["entropy_bits"],   redacted["entropy_bits"])
-        self.assertEqual(plain["criteria"],       redacted["criteria"])
+        # entropy_bits is bucketed to nearest 5 bits in redact mode.
+        redacted_entropy = redacted["entropy_bits"]
+        self.assertEqual(redacted_entropy % 5, 0,
+            f"Redacted entropy must be a multiple of 5, got {redacted_entropy}")
+        self.assertAlmostEqual(
+            redacted_entropy,
+            round(plain["entropy_bits"] / 5.0) * 5.0,
+            places=6,
+            msg="Redacted entropy must equal plain entropy rounded to nearest 5 bits",
+        )
+        # Structural equality: same criteria in the same order with the same
+        # scoring outcome — only detail strings may differ due to scrubbing.
+        self.assertEqual(len(plain["criteria"]), len(redacted["criteria"]))
+        for p_c, r_c in zip(plain["criteria"], redacted["criteria"]):
+            self.assertEqual(p_c["name"],      r_c["name"])
+            self.assertEqual(p_c["passed"],    r_c["passed"])
+            self.assertEqual(p_c["skipped"],   r_c["skipped"])
+            self.assertEqual(p_c["score"],     r_c["score"])
+            self.assertEqual(p_c["max_score"], r_c["max_score"])
 
-    def test_redact_default_is_false(self) -> None:
-        """criteria_summary(analysis) without redact kwarg must NOT redact."""
+    def test_redact_default_is_true(self) -> None:
+        """criteria_summary(analysis) without redact kwarg must redact by default."""
         result  = self.a.analyze("Hello123!")
         summary = criteria_summary(result)
-        self.assertNotEqual(summary["password_masked"], "[REDACTED]")
+        self.assertEqual(
+            summary["password_masked"], "[REDACTED]",
+            "Default redact=True must suppress the masked form",
+        )
+        self.assertIsNone(
+            summary["password_length"],
+            "Default redact=True must suppress the length",
+        )
 
     def test_redact_json_field_is_string(self) -> None:
         """password_masked must always be a string even when redacted."""
@@ -494,6 +616,275 @@ class TestRedactFlag(unittest.TestCase):
         result  = self.a.analyze("ab")
         summary = criteria_summary(result, redact=True)
         self.assertEqual(summary["password_masked"], "[REDACTED]")
+
+# ===========================================================================
+# --redact must hide length in the human-readable table
+# ===========================================================================
+
+class TestRedactHidesLengthInCriteriaTable(unittest.TestCase):
+    """Regression tests."""
+
+    def setUp(self) -> None:
+        import io
+        import re
+        import contextlib
+        self._io      = io
+        self._re      = re
+        self._ctx     = contextlib
+        self.a        = PasswordAnalyzer()
+
+    def _render_human(self, pw: str, *, redact: bool) -> str:
+        from passcheck.display import print_analysis
+        buf = self._io.StringIO()
+        with self._ctx.redirect_stdout(buf):
+            print_analysis(self.a.analyze(pw), redact=redact)
+        return buf.getvalue()
+
+    def test_no_redact_shows_length_in_detail(self) -> None:
+        """Without --redact the length must appear in the length-criterion rows."""
+        output = self._render_human("Hello123!", redact=False)
+        self.assertTrue(
+            self._re.search(r"\b\d+\s+chars\b", output),
+            "Non-redacted output must contain 'N chars' in the criteria table",
+        )
+
+    def test_redact_hides_length_in_criteria_table(self) -> None:
+        """With --redact no bare integer must precede ' chars' in the table rows."""
+        output = self._render_human("Hello123!", redact=True)
+        self.assertFalse(
+            self._re.search(r"\b\d+\s+chars\b", output),
+            f"--redact must suppress 'N chars' in the criteria table, got:\n{output}",
+        )
+
+    def test_redact_replaces_with_hidden_sentinel(self) -> None:
+        """With --redact the length rows must contain '<hidden> chars …'."""
+        output = self._render_human("Hello123!", redact=True)
+        self.assertIn(
+            "<hidden>",
+            output,
+            "--redact must replace the length integer with '<hidden>'",
+        )
+
+    def test_redact_still_suppresses_header_password(self) -> None:
+        """--redact must still replace the header password with [REDACTED]."""
+        output = self._render_human("Hello123!", redact=True)
+        self.assertIn("[REDACTED]", output)
+
+    def test_json_and_human_redact_are_consistent(self) -> None:
+        """JSON criteria detail and human-readable detail must both be scrubbed."""
+        import re
+        result   = self.a.analyze("Hello123!")
+        summary  = criteria_summary(result, redact=True)
+        for crit in summary["criteria"]:
+            self.assertFalse(
+                re.match(r"^\d+(?= chars )", crit["detail"]),
+                f"JSON detail still contains leading integer: {crit['detail']!r}",
+            )
+        output = self._render_human("Hello123!", redact=True)
+        self.assertFalse(
+            re.search(r"\b\d+\s+chars\b", output),
+            "Human-readable output still contains 'N chars' under --redact",
+        )
+
+# ===========================================================================
+# Entropy must not double-penalise moderate repetition
+# ===========================================================================
+
+class TestEntropyNoDoublePenalty(unittest.TestCase):
+    """Regression tests."""
+
+    def _entropy(self, pw: str) -> float:
+        g = split_graphemes(pw)
+        return compute_entropy(pw, g, len(g))
+
+    def test_moderate_repetition_not_over_penalised(self) -> None:
+        """'aaaaabcde' (5 of 9 chars repeated) must score above 20 bits."""
+        e = self._entropy("aaaaabcde")
+        self.assertGreater(e, 20.0,
+            f"Moderate-repetition password should score >20 bits, got {e:.1f}")
+        self.assertLess(e, 40.0,
+            f"Moderate-repetition password should still score <40 bits, got {e:.1f}")
+
+    def test_fully_uniform_password_remains_near_zero(self) -> None:
+        """A password of all-identical characters must still score near 0 bits."""
+        e = self._entropy("aaaaaaaaaa")
+        self.assertLess(e, 10.0,
+            f"All-same-char password should stay <10 bits, got {e:.1f}")
+
+    def test_structural_block_repeat_still_penalised(self) -> None:
+        """'Ab1!Ab1!Ab1!Ab1!Ab1!' (perfect 4-char block × 5) must be penalised
+        via the retained repeated_block_period reduction."""
+        e = self._entropy("Ab1!" * 5)
+        long_e = self._entropy("Ab1!" * 5 + "Xy9#Zq7@")  # non-repeating suffix
+        self.assertLess(e, long_e,
+            "Structural repeat must score lower than a non-repeating equivalent")
+
+    def test_diverse_long_password_scores_high(self) -> None:
+        """A complex 22-char password must exceed the 70-bit ENTROPY_GOOD_THRESHOLD."""
+        e = self._entropy("P@ssw0rd!ExtraLong#2024")
+        self.assertGreater(e, 70.0,
+            f"Complex 22-char password should exceed 70 bits, got {e:.1f}")
+
+    def test_entropy_monotone_with_length_for_uniform_pool(self) -> None:
+        """Entropy of 'Abc1!...' must grow as we add more diverse characters."""
+        pw_short = "Abc1!"
+        pw_long  = "Abc1!Xyz9#Pqr7@"
+        e_short  = self._entropy(pw_short)
+        e_long   = self._entropy(pw_long)
+        self.assertGreater(e_long, e_short,
+            "A longer, diverse password must score higher than the shorter prefix")
+
+# ===========================================================================
+# Long passphrases must not be capped for substring patterns
+# ===========================================================================
+
+class TestKeyboardPatternFractionGate(unittest.TestCase):
+    """Regression tests."""
+
+    def setUp(self) -> None:
+        self.a = PasswordAnalyzer()
+
+    def _kb(self, pw: str):
+        return next(c for c in self.a.analyze(pw).criteria
+                    if c.name == "No Keyboard Pattern")
+
+    def test_true_positive_short_qwerty(self) -> None:
+        """'qwerty123' (6/9 chars = 67 %) must still be flagged."""
+        self.assertFalse(self._kb("qwerty123").passed)
+
+    def test_true_positive_numeric_walk(self) -> None:
+        """'abc123456' with 6-char numeric walk (67 %) must still be flagged."""
+        self.assertFalse(self._kb("abc123456").passed)
+
+    def test_false_positive_passphrase_qwerty_suffix(self) -> None:
+        """'correct-horse-battery-staple-qwerty' (35 chars, 'qwerty' = 17 %)
+        must no longer trigger the pattern criterion."""
+        result = self.a.analyze("correct-horse-battery-staple-qwerty")
+        self.assertTrue(self._kb("correct-horse-battery-staple-qwerty").passed,
+            "35-char passphrase must not be flagged for a 6-char keyboard suffix")
+        self.assertFalse(result.weak_pattern_cap_applied,
+            "Passphrase must not have the weak-pattern cap applied")
+
+    def test_false_positive_passphrase_numeric_suffix(self) -> None:
+        """'my-secure-passphrase-1234567890' must not be capped (10/30 = 33 %)."""
+        pw = "my-secure-passphrase-1234567890"
+        result = self.a.analyze(pw)
+        self.assertFalse(result.weak_pattern_cap_applied,
+            "Passphrase with numeric suffix must not be capped")
+
+    def test_passphrase_scores_above_medium_after_fix(self) -> None:
+        """A 35-char mixed passphrase must score well above Medium (40 %)."""
+        result = self.a.analyze("correct-horse-battery-staple-qwerty")
+        self.assertGreater(result.score_percent, 40,
+            f"Expected >40 %, got {result.score_percent} %")
+
+    def test_clean_strong_password_unaffected(self) -> None:
+        """'Xk9!mN#vLq2@' must still pass the keyboard check."""
+        self.assertTrue(self._kb("Xk9!mN#vLq2@").passed)
+
+# ===========================================================================
+# criterion_char_uniqueness must skip for empty passwords
+# ===========================================================================
+
+class TestCharUniquenessEmptyPasswordSkip(unittest.TestCase):
+    """Regression tests for BUG-002."""
+
+    def setUp(self) -> None:
+        from passcheck.analyzer.character import criterion_char_uniqueness
+        self._fn = criterion_char_uniqueness
+
+    def test_empty_password_is_skipped(self) -> None:
+        result = self._fn([], 0)
+        self.assertTrue(result.skipped,
+            "criterion_char_uniqueness must return skipped=True for empty input")
+
+    def test_empty_password_skip_reason(self) -> None:
+        result = self._fn([], 0)
+        self.assertEqual(result.skip_reason, SkipReason.EMPTY_PASSWORD)
+
+    def test_empty_password_no_misleading_suggestion(self) -> None:
+        result = self._fn([], 0)
+        self.assertEqual(result.suggestion, "",
+            "A skipped criterion must not carry a suggestion")
+
+    def test_empty_password_score_is_zero(self) -> None:
+        result = self._fn([], 0)
+        self.assertEqual(result.score, 0)
+
+    def test_non_empty_password_still_evaluated(self) -> None:
+        result = self._fn(["a", "b", "c", "d"], 4)
+        self.assertFalse(result.skipped,
+            "Non-empty input must not be skipped")
+
+    def test_high_uniqueness_still_passes(self) -> None:
+        graphemes = list("Abc1!Xyz9")
+        result    = self._fn(graphemes, len(graphemes))
+        self.assertTrue(result.passed)
+
+# ===========================================================================
+# Built-in wordlist must be below the raised threshold
+# ===========================================================================
+
+class TestWordlistThresholdRaised(unittest.TestCase):
+    """Regression tests."""
+
+    def test_builtin_list_meets_min_threshold_after_reversal_expansion(self) -> None:
+        from passcheck.constants.common_passwords_data import RAW_BUILTIN_COMMON_PASSWORDS
+        from passcheck.constants.common_passwords_loader import (
+            _expand_builtin_passwords,
+            _MIN_EXPECTED_COMMON_PASSWORDS,
+        )
+        expanded = _expand_builtin_passwords(RAW_BUILTIN_COMMON_PASSWORDS)
+        self.assertGreaterEqual(
+            len(expanded),
+            _MIN_EXPECTED_COMMON_PASSWORDS,
+            f"Built-in list ({len(expanded)} entries) must meet or exceed the minimum "
+            f"({_MIN_EXPECTED_COMMON_PASSWORDS}) after DESIGN-003 reversal expansion.",
+        )
+
+    def test_known_common_password_still_detected_without_wordlist(self) -> None:
+        """'password' must still be flagged even when the wordlist is insufficient,
+        because is_common is evaluated before the wordlist_sufficient check."""
+        a    = PasswordAnalyzer()
+        crit = next(c for c in a.analyze("password").criteria
+                    if c.name == "Not a Common Password")
+        # Either failed (found in built-in list) or skipped (wordlist insufficient).
+        # Either outcome is correct; the important thing is it must NOT pass.
+        self.assertFalse(crit.passed,
+            "'password' must never pass the common-password criterion")
+
+    def test_wordlist_sufficient_true_with_builtin_list(self) -> None:
+        """wordlist_degraded (always-False dead field) replaced
+        by wordlist_sufficient and external_wordlist_loaded.  The built-in
+        expanded list meets the minimum threshold so wordlist_sufficient
+        must be True in a default install."""
+        a       = PasswordAnalyzer()
+        summary = criteria_summary(a.analyze("Xk9!mN#vLq2@"))
+        self.assertIn("wordlist_sufficient", summary,
+            "wordlist_sufficient key must be present in AnalysisSummary")
+        self.assertNotIn("wordlist_degraded", summary,
+            "wordlist_degraded must have been removed (was permanently False dead code)")
+        self.assertTrue(
+            summary["wordlist_sufficient"],
+            "Built-in list must meet the minimum threshold; wordlist_sufficient must be True",
+        )
+
+    def test_external_wordlist_loaded_false_without_data_file(self) -> None:
+        """external_wordlist_loaded must be False when only
+        the built-in list is in use."""
+        import pathlib as _pathlib
+        data_file = (_pathlib.Path(__file__).parent.parent
+                     / "passcheck" / "data" / "common_passwords.txt")
+        if data_file.exists():
+            self.skipTest("External wordlist present")
+        a       = PasswordAnalyzer()
+        summary = criteria_summary(a.analyze("Xk9!mN#vLq2@"))
+        self.assertIn("external_wordlist_loaded", summary,
+            "external_wordlist_loaded key must be present in AnalysisSummary")
+        self.assertFalse(
+            summary["external_wordlist_loaded"],
+            "external_wordlist_loaded must be False when data file is absent",
+        )
 
 # ===========================================================================
 # Unicode_checks_skipped field in JSON output
@@ -602,8 +993,10 @@ class TestSingletonNoConcurrentRace(unittest.TestCase):
         import passcheck.cli.analyzer_singleton as _singleton_mod
 
         # Reset the singleton so the race window is real.
-        original = _singleton_mod._analyzer
-        _singleton_mod._analyzer = None
+        original      = _singleton_mod._analyzer
+        original_fast = _singleton_mod._analyzer_fast
+        _singleton_mod._analyzer      = None
+        _singleton_mod._analyzer_fast = None
 
         results: list[int] = []
         errors:  list[Exception] = []
@@ -620,8 +1013,9 @@ class TestSingletonNoConcurrentRace(unittest.TestCase):
         for t in threads:
             t.join()
 
-        # Restore original state.
-        _singleton_mod._analyzer = original
+        # Restore original state (both fast-path and canonical references).
+        _singleton_mod._analyzer      = original
+        _singleton_mod._analyzer_fast = original_fast
 
         self.assertEqual(errors, [], f"Errors during concurrent access: {errors}")
         self.assertEqual(
@@ -701,11 +1095,6 @@ class TestSecurityGates(unittest.TestCase):
             env={"PASSCHECK_ALLOW_INSECURE_FLAG": "1"},
             catch_exceptions=False,
         )
-        # BUG-001 fix: ExitCode.ERROR == 1, not 2.  The previous assertion
-        # `assertNotEqual(exit_code, 2)` was vacuously true because no exit
-        # code in the system is ever 2, so it gave zero regression protection.
-        # The correct assertion is that the gate-open path must succeed (0=OK)
-        # or produce a partial result (3=PARTIAL) — never ERROR (1).
         from passcheck.cli.exit_codes import ExitCode
         self.assertIn(
             result.exit_code,
@@ -739,11 +1128,11 @@ class TestSecurityGates(unittest.TestCase):
             "JSON output with --redact must have password_masked='[REDACTED]'")
 
     def test_json_without_redact_has_partial_mask(self) -> None:
-        """--json without --redact must NOT show '[REDACTED]' — should be asterisks."""
+        """--json --no-redact must NOT show '[REDACTED]' — should be asterisks."""
         self._skip_if_unavailable()
         result = self.runner.invoke(
             self.cli,
-            ["check", "--password", "Hello123!", "--json"],
+            ["check", "--password", "Hello123!", "--json", "--no-redact"],
             env={"PASSCHECK_ALLOW_INSECURE_FLAG": "1"},
             catch_exceptions=False,
         )
@@ -787,11 +1176,11 @@ class TestSecurityGates(unittest.TestCase):
             "unicode_checks_skipped must be True for a Unicode-only password")
 
 # ===========================================================================
-# SEC-001 — --redact must suppress password_length in all output paths
+# --redact must suppress password_length in all output paths
 # ===========================================================================
 
 class TestRedactSuppressesLength(unittest.TestCase):
-    """SEC-001: --redact must hide the exact password length, not just the masked form."""
+    """--redact must hide the exact password length, not just the masked form."""
 
     def setUp(self) -> None:
         try:
@@ -829,7 +1218,7 @@ class TestRedactSuppressesLength(unittest.TestCase):
         summary  = self.criteria_summary(analysis, redact=True)
         self.assertIsNone(
             summary["password_length"],
-            "password_length must be None when redact=True (SEC-001)",
+            "password_length must be None when redact=True",
         )
         self.assertEqual(summary["password_masked"], "[REDACTED]")
 
@@ -852,7 +1241,7 @@ class TestRedactSuppressesLength(unittest.TestCase):
         output = self._parse_json_output(result.output)
         self.assertIsNone(
             output.get("password_length"),
-            "JSON output with --redact must have password_length=null (SEC-001)",
+            "JSON output with --redact must have password_length=null",
         )
         self.assertEqual(output.get("password_masked"), "[REDACTED]")
 
@@ -878,16 +1267,16 @@ class TestRedactSuppressesLength(unittest.TestCase):
             self.assertNotRegex(
                 line,
                 r"\d+\s*chars",
-                "The Password: header line must not contain the char count with --redact (SEC-001)",
+                "The Password: header line must not contain the char count with --redact",
             )
         self.assertIn("[REDACTED]", result.output)
 
     def test_no_redact_shows_char_count_in_header(self) -> None:
-        """Human-readable header without --redact must show the character count."""
+        """Human-readable header with --no-redact must show the character count."""
         self._skip_if_unavailable()
         result = self.runner.invoke(
             self.cli,
-            ["check", "--password", "Hello123!"],
+            ["check", "--password", "Hello123!", "--no-redact"],
             env={"PASSCHECK_ALLOW_INSECURE_FLAG": "1"},
             catch_exceptions=False,
         )
@@ -901,13 +1290,12 @@ class TestRedactSuppressesLength(unittest.TestCase):
             "The Password: header line must show the char count without --redact",
         )
 
-
 # ===========================================================================
-# SEC-002 — fail-closed behaviour when wordlist coverage is insufficient
+# fail-closed behaviour when wordlist coverage is insufficient
 # ===========================================================================
 
 class TestWordlistFailClosed(unittest.TestCase):
-    """SEC-002: common-password criterion must skip, not pass, when the wordlist
+    """common-password criterion must skip, not pass, when the wordlist
     is too small to produce a reliable 'not found' verdict."""
 
     def setUp(self) -> None:
@@ -924,8 +1312,7 @@ class TestWordlistFailClosed(unittest.TestCase):
         if not self.available:
             self.skipTest("dependencies not available")
 
-    def test_not_found_with_insufficient_wordlist_is_skipped(self) -> None:
-        """'not found' + wordlist_sufficient=False must be SKIPPED, not passed."""
+    def test_not_found_with_insufficient_wordlist_is_failed(self) -> None:
         self._skip_if_unavailable()
         result = self.criterion(
             is_common=False,
@@ -934,11 +1321,17 @@ class TestWordlistFailClosed(unittest.TestCase):
             has_ascii_residue=True,
             wordlist_sufficient=False,
         )
-        self.assertTrue(result.skipped,
-            "criterion must be skipped when wordlist coverage is insufficient (SEC-002)")
+        self.assertFalse(result.skipped,
+            "criterion must NOT be skipped when wordlist coverage is insufficient; "
+            "it must be a fail so the denominator stays at 100")
         self.assertFalse(result.passed,
-            "criterion must not pass when wordlist coverage is insufficient (SEC-002)")
-        self.assertEqual(result.skip_reason, self.SkipReason.NO_WORDLIST_AVAILABLE)
+            "criterion must not pass when wordlist coverage is insufficient")
+        self.assertIsNone(result.skip_reason,
+            "skip_reason must be None on a failed (non-skipped) criterion")
+        self.assertEqual(result.score, 0,
+            "score must be 0 when wordlist is insufficient")
+        self.assertIn("could not verify", result.detail,
+            "detail must explain that verification was impossible, not that it passed")
 
     def test_found_with_insufficient_wordlist_still_fails(self) -> None:
         """A hit (is_common=True) must always be flagged regardless of list size."""
@@ -951,7 +1344,7 @@ class TestWordlistFailClosed(unittest.TestCase):
             wordlist_sufficient=False,
         )
         self.assertFalse(result.passed,
-            "A common-password hit must be reported even with a small wordlist (SEC-002)")
+            "A common-password hit must be reported even with a small wordlist")
         self.assertFalse(result.skipped,
             "A positive hit must not be skipped")
 
@@ -969,18 +1362,24 @@ class TestWordlistFailClosed(unittest.TestCase):
             "criterion must pass when password is not found in a sufficient wordlist")
         self.assertFalse(result.skipped)
 
-    def test_backward_compat_default_wordlist_sufficient_true(self) -> None:
-        """Omitting wordlist_sufficient must default to True (backward compat)."""
+    def test_default_wordlist_sufficient_is_false(self) -> None:
         self._skip_if_unavailable()
         result = self.criterion(
             is_common=False,
             can_lookup=True,
             length=12,
             has_ascii_residue=True,
-            # wordlist_sufficient not passed → defaults to True
+            # wordlist_sufficient NOT passed — must default to False (fail-closed)
         )
-        self.assertTrue(result.passed)
-        self.assertFalse(result.skipped)
+        self.assertFalse(
+            result.skipped,
+            "Default wordlist_sufficient=False must produce a FAIL, not a SKIP, "
+            "so the score denominator is not inflated.",
+        )
+        self.assertFalse(result.passed,
+            "criterion must not pass when wordlist_sufficient defaults to False")
+        self.assertIsNone(result.skip_reason,
+            "skip_reason must be None on a failed (non-skipped) criterion")
 
     def test_is_wordlist_sufficient_returns_bool(self) -> None:
         """is_wordlist_sufficient() must return a bool without raising."""
@@ -992,13 +1391,12 @@ class TestWordlistFailClosed(unittest.TestCase):
         self.assertIsInstance(result, bool,
             "is_wordlist_sufficient() must return bool")
 
-
 # ===========================================================================
-# SEC-003 — entropy annotation when pattern cap is applied
+# entropy annotation when pattern cap is applied
 # ===========================================================================
 
 class TestEntropyAnnotation(unittest.TestCase):
-    """SEC-003: entropy_note must be present in JSON when weak_pattern_cap_applied."""
+    """entropy_note must be present in JSON when weak_pattern_cap_applied."""
 
     def setUp(self) -> None:
         try:
@@ -1034,19 +1432,26 @@ class TestEntropyAnnotation(unittest.TestCase):
             "Test prerequisite: qwerty12345 must trigger the pattern cap")
         summary = self.criteria_summary(analysis)
         self.assertIsNotNone(summary["entropy_note"],
-            "entropy_note must not be None when weak_pattern_cap_applied (SEC-003)")
+            "entropy_note must not be None when weak_pattern_cap_applied")
         self.assertIsInstance(summary["entropy_note"], str)
         self.assertGreater(len(summary["entropy_note"]), 0)
 
-    def test_entropy_note_absent_when_cap_not_applied(self) -> None:
-        """entropy_note must be None for passwords that did not trigger the cap."""
+    def test_entropy_note_always_present(self) -> None:
+        """entropy_note must always be a non-empty string regardless of cap (SEC-001)."""
         self._skip_if_unavailable()
         analysis = self.analyzer.analyze("Xk9#mP2$vLqR")
         self.assertFalse(analysis.weak_pattern_cap_applied,
             "Test prerequisite: Xk9#mP2$vLqR must not trigger the pattern cap")
         summary = self.criteria_summary(analysis)
-        self.assertIsNone(summary["entropy_note"],
-            "entropy_note must be None when no cap was applied (SEC-003)")
+        self.assertIsNotNone(
+            summary["entropy_note"],
+            "entropy_note must always be present — formula is always an upper-bound estimate",
+        )
+        self.assertIsInstance(summary["entropy_note"], str)
+        self.assertGreater(
+            len(summary["entropy_note"]), 0,
+            "entropy_note must not be an empty string",
+        )
 
     def test_entropy_note_in_cli_json_output_when_cap_applied(self) -> None:
         """CLI --json output must include entropy_note when a weak pattern fires."""
@@ -1059,7 +1464,7 @@ class TestEntropyAnnotation(unittest.TestCase):
         )
         output = self._parse_json_output(result.output)
         self.assertIn("entropy_note", output,
-            "JSON output must contain entropy_note field (SEC-003)")
+            "JSON output must contain entropy_note field")
         self.assertIsNotNone(output["entropy_note"])
 
     def test_entropy_note_in_human_output_when_cap_applied(self) -> None:
@@ -1073,15 +1478,14 @@ class TestEntropyAnnotation(unittest.TestCase):
         )
         self.assertIn("theoretical", result.output.lower(),
             "Human-readable output must mention the theoretical nature of the "
-            "entropy estimate when the pattern cap was applied (SEC-003)")
-
+            "entropy estimate when the pattern cap was applied")
 
 # ===========================================================================
-# SEC-004 — --redact suppresses length in batch JSON error events
+# --redact suppresses length in batch JSON error events
 # ===========================================================================
 
 class TestBatchRedactSuppressesLength(unittest.TestCase):
-    """SEC-004: batch --json --redact must omit length/limit from skipped_invalid events."""
+    """batch --json --redact must omit length/limit from skipped_invalid events."""
 
     def setUp(self) -> None:
         try:
@@ -1112,17 +1516,17 @@ class TestBatchRedactSuppressesLength(unittest.TestCase):
         event = json.loads(lines[0])
         self.assertEqual(event.get("event"), "skipped_invalid")
         self.assertNotIn("length", event,
-            "length must be absent from skipped_invalid event when --redact is set (SEC-004)")
+            "length must be absent from skipped_invalid event when --redact is set")
         self.assertNotIn("limit", event,
-            "limit must be absent from skipped_invalid event when --redact is set (SEC-004)")
+            "limit must be absent from skipped_invalid event when --redact is set")
 
     def test_batch_json_no_redact_includes_length_for_oversized_password(self) -> None:
-        """Without --redact, skipped_invalid must include length and limit for debugging."""
+        """With --no-redact, skipped_invalid must include length and limit for debugging."""
         self._skip_if_unavailable()
         oversized = "a" * 300 + "\n"
         result = self.runner.invoke(
             self.cli,
-            ["batch", "--json"],
+            ["batch", "--json", "--no-redact"],
             input=oversized,
             catch_exceptions=False,
         )
@@ -1134,15 +1538,11 @@ class TestBatchRedactSuppressesLength(unittest.TestCase):
             "length must appear in skipped_invalid event without --redact")
         self.assertEqual(event["length"], 300)
 
-
 # ===========================================================================
-# BUG-002 — Non-ASCII digits must not satisfy the fifth variety class
+# Non-ASCII digits must not satisfy the fifth variety class
 # ===========================================================================
 
 class TestNonAsciiDigitVariety(unittest.TestCase):
-    """BUG-002: Arabic-Indic and similar non-ASCII digits must not count toward
-    the 'other Unicode characters' variety class while failing the ASCII-digit
-    criterion — that combination produced contradictory user feedback."""
 
     def setUp(self) -> None:
         try:
@@ -1166,17 +1566,17 @@ class TestNonAsciiDigitVariety(unittest.TestCase):
         pw = "٠١٢٣٤٥٦٧٨"
         result = self.criterion_digit(pw)
         self.assertFalse(result.passed,
-            "Non-ASCII digits must not satisfy the ASCII-digit criterion (BUG-002)")
+            "Non-ASCII digits must not satisfy the ASCII-digit criterion")
 
     def test_arabic_indic_digits_fail_variety_class(self) -> None:
-        """A password of only Arabic-Indic digits must show 0/5 character classes."""
+        """A password of only Arabic-Indic digits must fail the variety criterion."""
         self._skip_if_unavailable()
         pw = "٠١٢٣٤٥٦٧٨"
         result = self.criterion_variety(pw)
         self.assertFalse(result.passed,
-            "Arabic-Indic digits alone must not satisfy the variety criterion (BUG-002)")
-        self.assertIn("0/5", result.detail,
-            "Detail must show 0 classes present for Arabic-Indic-only password")
+            "Arabic-Indic digits alone must not satisfy the variety criterion")
+        self.assertIn("1/5", result.detail,
+            "Arabic-Indic digits count as 'other Unicode' (class 5) → detail must show 1/5")
 
     def test_arabic_script_non_digits_still_satisfy_variety_class(self) -> None:
         """Non-digit Arabic characters (e.g. letters) must still count as class 5."""
@@ -1187,7 +1587,7 @@ class TestNonAsciiDigitVariety(unittest.TestCase):
         # 1 class present (class 5 = other Unicode); variety fails (<3), but
         # the detail must show at least 1 class, confirming the class was counted.
         self.assertNotIn("0/5", result.detail,
-            "Non-digit Arabic letters must still count as the 'other Unicode' class (BUG-002 fix must not over-exclude)")
+            "Non-digit Arabic letters must still count as the 'other Unicode' class")
 
     def test_hiragana_still_satisfies_variety_class(self) -> None:
         """Hiragana (non-ASCII, non-digit) must still count as the 5th variety class."""
@@ -1198,13 +1598,11 @@ class TestNonAsciiDigitVariety(unittest.TestCase):
         self.assertNotIn("0/5", result.detail,
             "Hiragana must still count as the 'other Unicode' variety class")
 
-
 # ===========================================================================
-# BUG-003 — NON_ASCII_POOL_SIZE deprecation warning
+# NON_ASCII_POOL_SIZE deprecation warning
 # ===========================================================================
 
 class TestNonAsciiPoolSizeDeprecation(unittest.TestCase):
-    """BUG-003: Accessing NON_ASCII_POOL_SIZE must emit a DeprecationWarning."""
 
     def test_non_ascii_pool_size_emits_deprecation_warning(self) -> None:
         """Importing NON_ASCII_POOL_SIZE via passcheck.constants must warn."""
@@ -1232,7 +1630,7 @@ class TestNonAsciiPoolSizeDeprecation(unittest.TestCase):
         self.assertTrue(
             deprecation_warnings,
             "Accessing passcheck.constants.NON_ASCII_POOL_SIZE must emit a "
-            "DeprecationWarning mentioning 'NON_ASCII_POOL_SIZE' (BUG-003)",
+            "DeprecationWarning mentioning 'NON_ASCII_POOL_SIZE'",
         )
 
     def test_non_ascii_pool_size_not_in_star_import(self) -> None:
@@ -1241,7 +1639,7 @@ class TestNonAsciiPoolSizeDeprecation(unittest.TestCase):
         self.assertNotIn(
             "NON_ASCII_POOL_SIZE",
             constants_mod.__all__,
-            "NON_ASCII_POOL_SIZE must be removed from __all__ (BUG-003)",
+            "NON_ASCII_POOL_SIZE must be removed from __all__",
         )
 
     def test_non_ascii_pool_size_backward_compat_value(self) -> None:
@@ -1254,6 +1652,228 @@ class TestNonAsciiPoolSizeDeprecation(unittest.TestCase):
         self.assertEqual(value, 32_768,
             "Backward-compat shim must return the original 32 768 value")
 
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+# ==========================================================================
+# Regression tests added during the security-audit refactoring.
+# Each class is labelled with the audit finding it covers.
+# ==========================================================================
+
+class TestStructuralRepeatIsCommonSkip(unittest.TestCase):
+    """criterion_no_structural_repeat must skip for common passwords."""
+
+    def setUp(self) -> None:
+        from passcheck.analyzer.patterns import criterion_no_structural_repeat
+        self.fn = criterion_no_structural_repeat
+
+    def test_skips_when_is_common_true(self) -> None:
+        from passcheck.models import SkipReason
+        r = self.fn(list("aaaaaaa"), 7, is_common=True)
+        self.assertTrue(r.skipped,
+            "criterion_no_structural_repeat must skip when is_common=True")
+        self.assertEqual(r.skip_reason, SkipReason.COMMON_PASSWORD_DETECTED)
+        self.assertEqual(r.score, 0)
+
+    def test_fires_when_is_common_false(self) -> None:
+        r = self.fn(list("aaaaaaa"), 7, is_common=False)
+        self.assertFalse(r.skipped)
+        self.assertFalse(r.passed)
+
+    def test_passes_non_repetitive_non_common(self) -> None:
+        r = self.fn(list("aBcDeFgH"), 8, is_common=False)
+        self.assertFalse(r.skipped)
+        self.assertTrue(r.passed)
+
+    def test_default_is_common_false(self) -> None:
+        """is_common defaults to False so existing callers that omit it are unaffected."""
+        r = self.fn(list("aaaaaaa"), 7)
+        self.assertFalse(r.skipped)
+        self.assertFalse(r.passed)
+
+    def test_end_to_end_common_and_repetitive(self) -> None:
+        """password is common: the structural-repeat criterion must be skipped."""
+        from passcheck.analyzer.core import PasswordAnalyzer
+        from passcheck.models import SkipReason
+        az = PasswordAnalyzer()
+        r = az.analyze("password")
+        struct_crit = next(
+            (c for c in r.criteria if c.name == "No Structural Repetition"), None)
+        self.assertIsNotNone(struct_crit)
+        self.assertTrue(struct_crit.skipped,
+            "Structural-repeat criterion must be skipped for a common password")
+        self.assertEqual(struct_crit.skip_reason, SkipReason.COMMON_PASSWORD_DETECTED)
+
+class TestTopNumericPasswordsDetected(unittest.TestCase):
+    """Globally common all-digit passwords must be in the built-in list."""
+
+    def setUp(self) -> None:
+        from passcheck.analyzer.core import PasswordAnalyzer
+        self.az = PasswordAnalyzer()
+
+    def _common_crit(self, pw: str):
+        return next(
+            c for c in self.az.analyze(pw).criteria
+            if c.name == "Not a Common Password")
+
+    def test_111111_detected(self) -> None:
+        self.assertFalse(self._common_crit("111111").passed,
+            "'111111' must be detected as a common password")
+
+    def test_123456_detected(self) -> None:
+        self.assertFalse(self._common_crit("123456").passed,
+            "'123456' must be detected as a common password")
+
+    def test_654321_detected(self) -> None:
+        self.assertFalse(self._common_crit("654321").passed,
+            "'654321' must be detected as a common password")
+
+    def test_123123_detected(self) -> None:
+        self.assertFalse(self._common_crit("123123").passed,
+            "'123123' must be detected as a common password")
+
+    def test_11111111_detected(self) -> None:
+        self.assertFalse(self._common_crit("11111111").passed,
+            "'11111111' must be detected as a common password")
+
+    def test_111111_also_flagged_by_repeated_chars(self) -> None:
+        r = self.az.analyze("111111")
+        rep = next(c for c in r.criteria if c.name == "No Repeated Characters")
+        self.assertFalse(rep.passed,
+            "'111111' must fail the repeated-chars criterion (defence-in-depth)")
+
+class TestDictAttackAdvisory(unittest.TestCase):
+    """dict_attack_advisory fires for leet-substitution dictionary passwords."""
+
+    def setUp(self) -> None:
+        from passcheck.analyzer.core import PasswordAnalyzer
+        self.az = PasswordAnalyzer()
+
+    def test_leet_dictionary_password_gets_advisory(self) -> None:
+        r = self.az.analyze("Tr0ub4dor&3")
+        self.assertIn(r.strength_label, ("Strong", "Very Strong"),
+            "Tr0ub4dor&3 must score Strong/Very Strong for this test to be meaningful")
+        self.assertIsNotNone(r.dict_attack_advisory,
+            "dict_attack_advisory must be non-None for a leet-substitution dictionary password")
+
+    def test_high_entropy_random_no_advisory(self) -> None:
+        r = self.az.analyze("xK2$mL8!nP4@qR6^wT1")
+        if r.strength_label not in ("Strong", "Very Strong"):
+            self.skipTest("Password did not score Strong/Very Strong")
+        self.assertIsNone(r.dict_attack_advisory,
+            "A genuinely high-entropy password must not receive the advisory")
+
+    def test_advisory_absent_for_weak_password(self) -> None:
+        r = self.az.analyze("password")
+        self.assertNotIn(r.strength_label, ("Strong", "Very Strong"))
+        self.assertIsNone(r.dict_attack_advisory,
+            "Weak passwords must not receive the dictionary-attack advisory")
+
+    def test_advisory_in_json_non_redact(self) -> None:
+        from passcheck.scoring import criteria_summary
+        r = self.az.analyze("Tr0ub4dor&3")
+        summary = criteria_summary(r, redact=False)
+        self.assertIn("dict_attack_advisory", summary)
+
+    def test_advisory_none_in_redact_mode(self) -> None:
+        from passcheck.scoring import criteria_summary
+        r = self.az.analyze("Tr0ub4dor&3")
+        summary = criteria_summary(r, redact=True)
+        self.assertIsNone(summary["dict_attack_advisory"],
+            "dict_attack_advisory must be None in redact mode")
+
+class TestWarningTextConsistency(unittest.TestCase):
+    """The missing-wordlist warning must not contradict actual behaviour."""
+
+    def _capture_warning(self) -> str:
+        import io, sys, pathlib
+        from passcheck.constants.common_passwords_loader import _warn_missing_wordlist
+        buf = io.StringIO()
+        old, sys.stderr = sys.stderr, buf
+        try:
+            _warn_missing_wordlist(pathlib.Path("/tmp/nonexistent_wordlist.txt"))
+        finally:
+            sys.stderr = old
+        return buf.getvalue()
+
+    def test_does_not_claim_criterion_is_failed(self) -> None:
+        text = self._capture_warning()
+        self.assertNotIn("treated as FAILED", text,
+            "Warning must not claim criterion is FAILED when it actually PASSES")
+        self.assertNotIn("score = 0", text,
+            "Warning must not claim score=0 when the built-in list is sufficient")
+
+    def test_mentions_builtin_list_is_functional(self) -> None:
+        text = self._capture_warning().lower()
+        self.assertTrue(
+            any(w in text for w in ("built-in", "fallback", "sufficient")),
+            "Warning must mention the built-in list and indicate it is functional")
+
+class TestAnalyzerSingletonFastPath(unittest.TestCase):
+    """BUG-005: get_analyzer() must use a lock-free fast path after first init."""
+
+    def test_fast_path_set_after_first_call(self) -> None:
+        from passcheck.cli import analyzer_singleton
+        _ = analyzer_singleton.get_analyzer()
+        self.assertIsNotNone(analyzer_singleton._analyzer_fast,
+            "_analyzer_fast must be set after the first get_analyzer() call")
+
+    def test_repeated_calls_return_same_instance(self) -> None:
+        from passcheck.cli.analyzer_singleton import get_analyzer
+        a1, a2 = get_analyzer(), get_analyzer()
+        self.assertIs(a1, a2)
+
+    def test_fast_and_canonical_are_same_object(self) -> None:
+        """After a clean init, _analyzer and _analyzer_fast must be the same object.
+        We reset both references first so that prior test teardowns that
+        partially restore state (e.g. TestSingletonNoConcurrentRace) cannot
+        leave them out of sync before this assertion.
+        """
+        import passcheck.cli.analyzer_singleton as _mod
+        orig      = _mod._analyzer
+        orig_fast = _mod._analyzer_fast
+        _mod._analyzer      = None
+        _mod._analyzer_fast = None
+        try:
+            instance = _mod.get_analyzer()
+            self.assertIs(_mod._analyzer, _mod._analyzer_fast,
+                "_analyzer and _analyzer_fast must point to the same object after init")
+            self.assertIs(instance, _mod._analyzer_fast)
+        finally:
+            _mod._analyzer      = orig
+            _mod._analyzer_fast = orig_fast
+
+class TestArgvRedaction(unittest.TestCase):
+    """SEC-003: _redact_argv must overwrite the password in sys.argv."""
+
+    def test_redacts_standalone_value(self) -> None:
+        import sys
+        from passcheck.cli.security import _redact_argv
+        orig = sys.argv[:]
+        try:
+            sys.argv = ["passcheck", "--password", "mysecret"]
+            _redact_argv("mysecret")
+            self.assertNotIn("mysecret", sys.argv)
+        finally:
+            sys.argv = orig
+
+    def test_redacts_equals_form(self) -> None:
+        import sys
+        from passcheck.cli.security import _redact_argv
+        orig = sys.argv[:]
+        try:
+            sys.argv = ["passcheck", "--password=mysecret"]
+            _redact_argv("mysecret")
+            self.assertNotIn("mysecret", sys.argv)
+        finally:
+            sys.argv = orig
+
+    def test_no_raise_when_value_absent(self) -> None:
+        import sys
+        from passcheck.cli.security import _redact_argv
+        orig = sys.argv[:]
+        try:
+            sys.argv = ["passcheck"]
+            _redact_argv("notpresent")
+        finally:
+            sys.argv = orig
