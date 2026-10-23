@@ -19,10 +19,6 @@ class SkipReason(str, Enum):
     UNICODE_ONLY_PASSWORD      = "unicode_only_password"
     TOO_SHORT_FOR_LOOKUP       = "too_short_for_lookup"
     EMPTY_PASSWORD             = "empty_password"
-    # SEC-002: Added to support fail-closed behaviour when the built-in
-    # common-password list is the only source and its coverage is too small
-    # to produce a reliable "not found" verdict.
-    NO_WORDLIST_AVAILABLE      = "no_wordlist_available"
 
 @dataclass(frozen=True)
 class CriterionResult:
@@ -139,8 +135,10 @@ class PasswordAnalysis:
     strength_color:  str
     criteria:        tuple[CriterionResult, ...] = field(default=())
     entropy_bits:    float                        = 0.0
-    suggestions:     tuple[str, ...]              = field(default=())
-    weak_pattern_cap_applied: bool                = False
+    suggestions:              tuple[str, ...]  = field(default=())
+    weak_pattern_cap_applied: bool             = False
+    entropy_floor_cap_applied: bool            = False
+    dict_attack_advisory:     str | None       = None
 
     def __post_init__(self) -> None:
         if self.password_length < 0:
@@ -181,6 +179,24 @@ class PasswordAnalysis:
                 "values before constructing this model."
             )
 
+        # ------------------------------------------------------------------
+        # Validate suggestions — no duplicates, no orphaned entries.
+        # ------------------------------------------------------------------
+
+        if len(self.suggestions) != len(frozenset(self.suggestions)):
+            _dupes: list[str] = sorted(
+                {s for s in self.suggestions if self.suggestions.count(s) > 1}
+            )
+            raise ValueError(
+                "PasswordAnalysis.suggestions must not contain duplicate entries. "
+                f"Duplicate entries: {_dupes!r}. "
+                "Each failed criterion's suggestion must appear at most once. "
+                "Ensure that no two CriterionResult objects in criteria carry "
+                "identical suggestion strings."
+            )
+
+        # Verify that every entry in suggestions corresponds to a failed
+        # criterion's suggestion field (no orphaned strings).
         criteria_suggestions = frozenset(
             c.suggestion
             for c in self.criteria
