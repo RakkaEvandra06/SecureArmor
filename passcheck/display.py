@@ -11,7 +11,12 @@ from colorama import Fore, Style
 
 from .constants import VALID_COLOUR_KEYS as _VALID_COLOUR_KEYS
 from .models import PasswordAnalysis, SkipReason, compute_score_percent
-from .scoring import criteria_summary, score_bar
+from .scoring import (  # scrub_detail is now public
+    LENGTH_CRITERION_NAMES,
+    criteria_summary,
+    score_bar,
+    scrub_detail,
+)
 from .utils import is_utf_terminal as _is_utf_terminal
 
 if TYPE_CHECKING:
@@ -97,11 +102,11 @@ def _rjust_ansi(s: str, width: int) -> str:
     return " " * max(width - _visible_len(s), 0) + s
 
 # ---------------------------------------------------------------------------
-# Unicode-skip detection helper
+# Skip-detection helpers
 # ---------------------------------------------------------------------------
 
 def _has_unicode_only_skip(analysis: PasswordAnalysis) -> bool:
-    """Return True when any criterion was skipped due to a Unicode-only password."""
+    """Return ``True`` when any criterion was skipped due to a Unicode-only password."""
     return any(
         c.skip_reason == SkipReason.UNICODE_ONLY_PASSWORD
         for c in analysis.criteria
@@ -112,18 +117,20 @@ def _has_unicode_only_skip(analysis: PasswordAnalysis) -> bool:
 # Public rendering functions
 # ---------------------------------------------------------------------------
 
-def print_analysis(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
+def print_analysis(analysis: PasswordAnalysis, *, redact: bool = True) -> None:
     """Render a full human-readable analysis block to stdout."""
     _ensure_colorama_init()
     _print_header(analysis, redact=redact)
-    _print_score_panel(analysis)
-    _print_criteria_table(analysis)
+    _print_score_panel(analysis, redact=redact)
+    _print_criteria_table(analysis, redact=redact)
     if analysis.suggestions:
         _print_suggestions(analysis)
+    if not redact and analysis.dict_attack_advisory:
+        _print_dict_attack_advisory(analysis.dict_attack_advisory)
     if _has_unicode_only_skip(analysis):
         _print_unicode_advisory()
 
-def print_analysis_json(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
+def print_analysis_json(analysis: PasswordAnalysis, *, redact: bool = True) -> None:
     """Render *analysis* as a compact JSON line (NDJSON-compatible) to stdout."""
     print(json.dumps(criteria_summary(analysis, redact=redact)))
 
@@ -156,22 +163,15 @@ def print_separator() -> None:
 # ---------------------------------------------------------------------------
 
 def _print_header(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
-    """Print the password header line.
-
-    SEC-001: When *redact* is ``True`` the masked form is replaced with
-    ``[REDACTED]`` **and** the character count is omitted — the exact length
-    is itself partial credential information.
-    """
-    display_pw = "[REDACTED]" if redact else analysis.password_masked
-    # SEC-001: omit the (N chars) suffix entirely when redact is active so
-    # that captured output does not leak the password length.
+    """Print the password header line."""
+    display_pw  = "[REDACTED]" if redact else analysis.password_masked
     length_part = "" if redact else f"  {_dim(f'({analysis.password_length} chars)')}"
     print(f"\n  {_bold('Password:')} {_dim(display_pw)}{length_part}")
 
-def _print_score_panel(analysis: PasswordAnalysis) -> None:
+def _print_score_panel(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
     """Print the score bar, strength label, entropy, and criteria counts."""
-    color = analysis.strength_color
-    score = analysis.score
+    color   = analysis.strength_color
+    score   = analysis.score
     eff_max = analysis.effective_max_score
     denom   = str(eff_max)
     bar_pct = compute_score_percent(score, eff_max)
@@ -192,24 +192,27 @@ def _print_score_panel(analysis: PasswordAnalysis) -> None:
         f"  {_bold(_coloured(f'{score:>3}/{denom}', color))}"
         f"  {_bold(_coloured(f'[{analysis.strength_label}]', color))}"
     )
-    # SEC-003: when the score cap fired, the raw entropy number is a
-    # theoretical character-distribution estimate that overstates real-world
-    # resistance.  Show a brief inline note so users are not misled by a high
-    # bit count next to a capped / "Weak" strength label.
     entropy_note = (
         " (theoretical; pattern cap applied — see suggestions)"
         if analysis.weak_pattern_cap_applied
         else ""
     )
+    # Round to the nearest 5-bit bucket in redact mode to prevent the
+    # exact entropy value from acting as a password-length oracle.
+    if redact:
+        entropy_display = round(analysis.entropy_bits / 5.0) * 5.0
+        entropy_str = f"{entropy_display:.0f} bits (≈5-bit precision)"
+    else:
+        entropy_str = f"{analysis.entropy_bits:.1f} bits"
     print(
         _dim(
-            f"  Entropy: {analysis.entropy_bits:.1f} bits{entropy_note}"
+            f"  Entropy: {entropy_str}{entropy_note}"
             f"   Criteria: {analysis.passed_count}/{analysis.total_criteria} passed"
         )
     )
     print()
 
-def _print_criteria_table(analysis: PasswordAnalysis) -> None:
+def _print_criteria_table(analysis: PasswordAnalysis, *, redact: bool = False) -> None:
     """Render the per-criterion results table."""
     rule_char = "─" if _UTF_TERMINAL else "-"
 
@@ -221,17 +224,32 @@ def _print_criteria_table(analysis: PasswordAnalysis) -> None:
     print(_dim("  " + rule_char * (_SEPARATOR_WIDTH - 2)))
 
     for criterion in analysis.criteria:
-        icon, score_cell = _format_criterion_status(criterion)
+        # SEC-001: pass redact so length-criteria show a neutral icon instead of
+        # ✔/✘, preventing the three-bit length-bracket oracle in terminal output.
+        icon, score_cell = _format_criterion_status(criterion, redact=redact)
         name_col  = _ljust_ansi(criterion.name[:col], col)
         score_col = _rjust_ansi(score_cell, 8)
-        print(f"  {icon}   {name_col}  {score_col}  {_dim(criterion.detail)}")
+        detail    = scrub_detail(criterion.detail, redact=redact)
+        print(f"  {icon}   {name_col}  {score_col}  {_dim(detail)}")
 
     print()
 
-def _format_criterion_status(criterion: CriterionResult) -> tuple[str, str]:
-    """Return ``(icon, score_cell)`` strings for a single criterion row."""
+def _format_criterion_status(
+    criterion: "CriterionResult",
+    *,
+    redact: bool = False,
+) -> tuple[str, str]:
+    """Return ``(icon, score_cell)`` strings for a single criterion row.
+
+    When *redact* is ``True`` the three length criteria are rendered with a
+    neutral "–" icon and no score cell so their pass/fail status cannot be
+    used as a 4-bracket password-length oracle (SEC-001).
+    """
     if criterion.skipped:
         return _coloured("⊘" if _UTF_TERMINAL else "~", "yellow"), _dim("   —   ")
+    # SEC-001: suppress pass/fail icon for length criteria in redact mode.
+    if redact and criterion.name in LENGTH_CRITERION_NAMES:
+        return _dim("–" if _UTF_TERMINAL else "-"), _dim("   —   ")
     if criterion.passed:
         return _coloured("✔" if _UTF_TERMINAL else "+", "green"), _coloured(f"+{criterion.score}", "green")
     return _coloured("✘" if _UTF_TERMINAL else "x", "red"), _dim(f"+{criterion.score}/{criterion.max_score}")
@@ -241,6 +259,17 @@ def _print_suggestions(analysis: PasswordAnalysis) -> None:
     print(f"  {_coloured(_bold('Suggestions'), 'yellow')}")
     for i, tip in enumerate(analysis.suggestions, start=1):
         print(f"   {_coloured(str(i) + '.', 'yellow')} {tip}")
+
+def _print_dict_attack_advisory(advisory: str) -> None:
+    """Print the dictionary-attack advisory when the entropy estimate is marginal."""
+    icon = "⚠" if _UTF_TERMINAL else "!"
+    print(
+        _coloured(
+            f"  {icon} Dictionary-attack advisory: {advisory}",
+            "yellow",
+        )
+    )
+    print()
 
 def _print_unicode_advisory() -> None:
     """Print an advisory when common-password / keyboard checks were skipped."""
