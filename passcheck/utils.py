@@ -1,11 +1,13 @@
 """Shared utilities: terminal detection, password masking, grapheme splitting,
-structural repetition, and leet-speak normalisation."""
+structural repetition, and leet-speak normalisation.
+"""
 from __future__ import annotations
 
 import codecs
 import logging as _logging
 import re
 import sys
+import threading as _threading
 import unicodedata
 
 # ---------------------------------------------------------------------------
@@ -47,19 +49,23 @@ try:
         return list(_grapheme.graphemes(s))
 
 except ImportError:
-    _grapheme_fallback_warned = False
 
-    def split_graphemes(s: str) -> list[str]:
+    _grapheme_fallback_warned: bool            = False
+    _grapheme_fallback_lock:   _threading.Lock = _threading.Lock()
+
+    def split_graphemes(s: str) -> list[str]:  # type: ignore[no-redef]
         """Fallback: split by Unicode code points."""
         global _grapheme_fallback_warned
-        if not _grapheme_fallback_warned:
-            _logging.getLogger(__name__).warning(
-                "Optional 'grapheme' package not installed; falling back to "
-                "code-point splitting. Multi-codepoint Unicode characters "
-                "(emoji, combining marks) may be miscounted as a result. "
-                "For full correctness, install with: pip install securearmor[unicode]"
-            )
-            _grapheme_fallback_warned = True
+        if not _grapheme_fallback_warned:                    # fast path — no lock
+            with _grapheme_fallback_lock:
+                if not _grapheme_fallback_warned:            # re-check under lock
+                    _logging.getLogger(__name__).warning(
+                        "Optional 'grapheme' package not installed; falling back to "
+                        "code-point splitting. Multi-codepoint Unicode characters "
+                        "(emoji, combining marks) may be miscounted as a result. "
+                        "For full correctness, install with: pip install securearmor[unicode]"
+                    )
+                    _grapheme_fallback_warned = True
         return list(s)
 
 def grapheme_len(s: str) -> int:
@@ -75,11 +81,35 @@ def grapheme_unique_count(s: str) -> int:
 # ---------------------------------------------------------------------------
 
 def repeated_block_period(seq: str | list[str]) -> int:
-    """Return the period of the shortest exact repeating block in *seq*."""
+    """Return the period of the shortest repeating block in *seq*, or 0 if
+    none is found."""
     n = len(seq)
     for p in range(1, n // 2 + 1):
-        if n % p == 0 and seq == seq[:p] * (n // p):
+
+        # ── Period-1 special case: all identical characters ───────────────
+        # Exempted from the 3-copy minimum — even "aa" (2 copies) is a clear
+        # structural pattern that should reduce the entropy estimate.
+        if p == 1:
+            if all(seq[i] == seq[0] for i in range(n)):
+                return 1
+            continue
+
+        reps = n // p
+
+        # ── Require at least 3 copies for periods > 1 ────────────────────
+        # A 2-copy exact repetition ("abab") is too short to penalise; it may
+        # appear by coincidence in a genuinely random password.
+        if reps < 3:
+            continue
+
+        # ── Near-mode prefix check ────────────────────────────────────────
+        # Compare only the first p*(reps-1) characters.  This detects both:
+        #   • Exact repetitions: all n = p*reps characters follow the period.
+        #   • Near repetitions: the last copy is partial or corrupted.
+        match_len = p * (reps - 1)
+        if match_len > 0 and all(seq[i] == seq[i % p] for i in range(match_len)):
             return p
+
     return 0
 
 def masked_password(password: str) -> str:
@@ -116,8 +146,18 @@ _leet_source: dict[str, str] = {
 LEET_TABLE: dict[int, int] = str.maketrans(
     "".join(_leet_source.keys()), "".join(_leet_source.values())
 )
+_leet_source_1_as_l: dict[str, str] = {**_leet_source, "1": "l"}
+LEET_TABLE_1_AS_L: dict[int, int] = str.maketrans(
+    "".join(_leet_source_1_as_l.keys()), "".join(_leet_source_1_as_l.values())
+)
 
-_PUNCTUATION_CHARS: str = """!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""
+# ---------------------------------------------------------------------------
+# _PUNCTUATION_CHARS derived from SPECIAL_CHARS
+# ---------------------------------------------------------------------------
+
+from .constants.special_chars import SPECIAL_CHARS as _SPECIAL_CHARS  # noqa: E402
+
+_PUNCTUATION_CHARS: str = _SPECIAL_CHARS
 _MIN_ASCII_RESIDUE_LEN: int = 4
 
 _EDGE_DECORATION_RE: re.Pattern[str] = re.compile(
@@ -148,7 +188,19 @@ def normalise_for_lookup(pw: str) -> frozenset[str]:
     whitespace_leet         = whitespace_stripped.translate(LEET_TABLE)
     stripped_normalised     = stripped.translate(LEET_TABLE)
     edge_stripped_leet      = edge_stripped.translate(LEET_TABLE)
-    reversed_leet           = leet_full[::-1]
+
+    leet_full_l             = ascii_pw.translate(LEET_TABLE_1_AS_L)
+    whitespace_leet_l       = whitespace_stripped.translate(LEET_TABLE_1_AS_L)
+    stripped_leet_l         = stripped.translate(LEET_TABLE_1_AS_L)
+    edge_stripped_leet_l    = edge_stripped.translate(LEET_TABLE_1_AS_L)
+
+    # ── Reversed variants ────────────────────────────────────────────────────
+
+    reversed_ascii       = ascii_pw[::-1]
+    reversed_leet        = leet_full[::-1]
+    reversed_leet_l      = leet_full_l[::-1]
+    reversed_stripped    = stripped[::-1]
+    reversed_edge        = edge_stripped[::-1]
 
     return frozenset(filter(None, {
         ascii_pw,
@@ -159,5 +211,13 @@ def normalise_for_lookup(pw: str) -> frozenset[str]:
         whitespace_leet,
         stripped_normalised,
         edge_stripped_leet,
+        leet_full_l,
+        whitespace_leet_l,
+        stripped_leet_l,
+        edge_stripped_leet_l,
+        reversed_ascii,
         reversed_leet,
+        reversed_leet_l,
+        reversed_stripped,
+        reversed_edge,
     }))
