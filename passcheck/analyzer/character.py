@@ -1,10 +1,4 @@
-"""Character-class and composition criteria.
-
-Covers presence checks (uppercase / lowercase / digit / special) plus the
-two composition checks (variety across classes, uniqueness ratio) — grouped
-together because they all reason about the *character makeup* of the
-password, as opposed to length (length.py) or anti-patterns (patterns.py).
-"""
+"""Character-class and composition criteria."""
 from __future__ import annotations
 
 from ..constants import (
@@ -14,7 +8,8 @@ from ..constants import (
     SCORE_WEIGHTS,
     SPECIAL_CHARS_SET,
 )
-from ..models import CriterionResult
+from ..models import CriterionResult, SkipReason
+from ..utils import grapheme_unique_count
 
 __all__ = [
     "criterion_has_uppercase",
@@ -36,6 +31,10 @@ if CHAR_CLASS_COUNT != _EXPECTED_CHAR_CLASS_COUNT:
         f"{_EXPECTED_CHAR_CLASS_COUNT} character-class checks implemented in "
         "criterion_char_variety() below. Update one or the other."
     )
+
+# ---------------------------------------------------------------------------
+# Individual character-class criteria
+# ---------------------------------------------------------------------------
 
 def criterion_has_uppercase(pw: str) -> CriterionResult:
     weight = SCORE_WEIGHTS["has_uppercase"]
@@ -63,6 +62,9 @@ def criterion_has_lowercase(pw: str) -> CriterionResult:
 
 def criterion_has_digit(pw: str) -> CriterionResult:
     weight = SCORE_WEIGHTS["has_digit"]
+    # Deliberately restricted to ASCII digits (0-9).  Non-ASCII digit
+    # characters such as Arabic-Indic numerals (٣) are counted under class 5
+    # ("other Unicode") in criterion_char_variety, not here.
     passed = any(c.isascii() and c.isdigit() for c in pw)
     return CriterionResult(
         name="Digit",
@@ -85,35 +87,23 @@ def criterion_has_special(pw: str) -> CriterionResult:
         suggestion="" if passed else "Add a special character (e.g. ! @ # $ % ^ & *).",
     )
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Composition criteria
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def criterion_char_variety(pw: str) -> CriterionResult:
+    """Score based on the number of distinct character classes present."""
     weight = SCORE_WEIGHTS["char_variety"]
-    # BUG-002: The fifth class captures non-ASCII characters that have no
-    # ASCII-digit equivalent (Arabic-Indic digits, Devanagari digits, etc.
-    # return True for c.isdigit() but False for c.isascii()).  Previously
-    # those digits would satisfy this class while still failing the dedicated
-    # ASCII-digit criterion (criterion_has_digit), producing contradictory
-    # feedback ("you have variety" but "add a digit 0-9").
-    #
-    # Fix: add `and not c.isdigit()` so non-ASCII numeric characters are
-    # excluded from the "other Unicode" class.  A password that consists
-    # entirely of Arabic-Indic digits now correctly shows 0/5 classes and
-    # receives the "add a digit (0-9)" suggestion without also receiving
-    # partial variety credit.
     classes_present = [
-        any(c.isupper() for c in pw),                                            # class 1: uppercase
-        any(c.islower() for c in pw),                                            # class 2: lowercase
-        any(c.isascii() and c.isdigit() for c in pw),                           # class 3: ASCII digit
-        any(c in SPECIAL_CHARS_SET for c in pw),                                # class 4: special char
-        any(                                                                     # class 5: other Unicode
-            not c.isascii()
-            and not c.isupper()
-            and not c.islower()
-            and not c.isdigit()   # ← excludes non-ASCII digits (BUG-002 fix)
-            for c in pw
+        any(c.isupper() for c in pw),                           # class 1: uppercase (any script)
+        any(c.islower() for c in pw),                           # class 2: lowercase (any script)
+        any(c.isascii() and c.isdigit() for c in pw),           # class 3: ASCII digit 0-9
+        any(c in SPECIAL_CHARS_SET for c in pw),                # class 4: ASCII special char
+        any(                                                    # class 5: other Unicode —
+            not c.isascii()                                     #   non-ASCII chars not in
+            and not c.isupper()                                 #   classes 1 or 2; includes
+            and not c.islower()                                 #   non-ASCII digits, CJK,
+            for c in pw                                         #   emoji, symbols, etc.
         ),
     ]
 
@@ -138,8 +128,18 @@ def criterion_char_variety(pw: str) -> CriterionResult:
 
 def criterion_char_uniqueness(graphemes: list[str], length: int) -> CriterionResult:
     weight = SCORE_WEIGHTS["char_uniqueness"]
-    unique_count = len(set(graphemes))
-    unique_ratio = unique_count / max(length, 1)
+    if length == 0:
+        return CriterionResult(
+            name="Character Uniqueness",
+            passed=False,
+            score=0,
+            max_score=weight,
+            detail="skipped, password is empty",
+            skipped=True,
+            skip_reason=SkipReason.EMPTY_PASSWORD,
+        )
+    unique_count = grapheme_unique_count(graphemes)
+    unique_ratio = unique_count / length
     passed = unique_ratio >= CHAR_UNIQUENESS_MIN_RATIO
     return CriterionResult(
         name="Character Uniqueness",
